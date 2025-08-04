@@ -1478,10 +1478,8 @@ Lattice_dealloc(PyObject *self) {
         lat->rank--;
         Py_DECREF(lat->basis[lat->rank]);
     }
+    // For locality, the Py_ssize_t buffers are allocated together.
     PyMem_Free(lat->zero_columns);
-    PyMem_Free(lat->col_to_pivot);
-    PyMem_Free(lat->row_to_pivot);
-    PyMem_Free(lat->nonzero_end_in_row);
     Py_TYPE(self)->tp_free(self);
 }
 
@@ -1689,25 +1687,23 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 static PyObject *
 Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
 {
-    Py_ssize_t *zero_columns = NULL;
-    Py_ssize_t *col_to_pivot = NULL;
-    Py_ssize_t *row_to_pivot = NULL;
-    Py_ssize_t *nonzero_end_in_row = NULL;
-    if (!(zero_columns = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
-        goto error;
+    if (N > PY_SSIZE_T_MAX/(4*sizeof(Py_ssize_t))) {
+        PyErr_SetString(PyExc_OverflowError, "Lattice(N) argument too big");
+        return NULL;
     }
-    if (!(col_to_pivot = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
-        goto error;
+    Py_ssize_t *buffer = PyMem_Malloc(4*N*sizeof(Py_ssize_t));
+    if (buffer == NULL) {
+        return PyErr_NoMemory();
     }
-    if (!(row_to_pivot = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
-        goto error;
-    }
-    if (!(nonzero_end_in_row = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
-        goto error;
-    }
+    // For locality, the Py_ssize_t buffers are allocated together.
+    Py_ssize_t *zero_columns = buffer;
+    Py_ssize_t *col_to_pivot = &buffer[1*N];
+    Py_ssize_t *row_to_pivot = &buffer[2*N];
+    Py_ssize_t *nonzero_end_in_row = &buffer[3*N];
     Lattice *self = (Lattice *)type->tp_alloc(type, N);
     if (!self) {
-        goto error;
+        PyMem_Free(buffer);
+        return NULL;
     }
     assert(Py_SIZE(self) == N);
     self->rank = 0;
@@ -1723,12 +1719,6 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     self->HNF_policy = HNF_policy;
     self->first_HNF_row = 0;
     return (PyObject *)self;
-error:
-    PyMem_Free(zero_columns);
-    PyMem_Free(col_to_pivot);
-    PyMem_Free(row_to_pivot);
-    PyMem_Free(nonzero_end_in_row);
-    return PyErr_NoMemory();
 }
 
 static PyObject *
