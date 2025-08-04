@@ -39,8 +39,8 @@ pylong_negative(PyObject *a) {
 }
 
 static inline int
-pylong_is_negative(PyObject *a, PyObject *zero) {
-    PyObject *res = PyLong_Type.tp_richcompare(a, zero, Py_LT);
+pylong_lt(PyObject *a, PyObject *b) {
+    PyObject *res = PyLong_Type.tp_richcompare(a, b, Py_LT);
     if (res == NULL) {
         return -1;
     }
@@ -67,7 +67,6 @@ PyLong_FromIntptr(intptr_t x) {
     static_assert(sizeof(intptr_t) == sizeof(Py_ssize_t));
     return PyLong_FromSsize_t(x);
 }
-
 
 
 /*********************************************************************/
@@ -119,6 +118,7 @@ intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res) {
 }
 static inline bool
 intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+    static_assert(sizeof(uintptr_t) == sizeof(uint64_t));
     intptr_t high_word = __mulh(a, b);
     uintptr_t low_word = ((uintptr_t)a) * ((uintptr_t)b);
     bool negative = (bool)(low_word >> 63);
@@ -332,7 +332,7 @@ TagInt_is_negative(TagInt a, PyObject *zero) {
     if (!TagInt_is_pointer(a)) {
         return a.bits < 0;
     }
-    return pylong_is_negative(untag_pointer(a), zero);
+    return pylong_lt(untag_pointer(a), zero);
 }
 
 // Puts a new reference in *c.
@@ -1450,6 +1450,9 @@ typedef struct {
     Py_ssize_t *zero_columns;
     Py_ssize_t *col_to_pivot; // length=Py_SIZE(self). -1 if no pivot
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
+    Py_ssize_t *nonzero_end_in_row; // One past the index of the last nonzero entry.
+    int HNF_policy;
+    Py_ssize_t first_HNF_row;
     PyObject *basis[1]; // logical length=rank. Has space for Py_SIZE(self);
 } Lattice;
 
@@ -1465,6 +1468,7 @@ Lattice_clear(PyObject *self) {
         lat->col_to_pivot[i] = -1;
     }
     lat->num_zero_columns = Py_SIZE(self);
+    lat->first_HNF_row = 0;
 }
 
 static void
@@ -1477,6 +1481,7 @@ Lattice_dealloc(PyObject *self) {
     PyMem_Free(lat->zero_columns);
     PyMem_Free(lat->col_to_pivot);
     PyMem_Free(lat->row_to_pivot);
+    PyMem_Free(lat->nonzero_end_in_row);
     Py_TYPE(self)->tp_free(self);
 }
 
@@ -1500,14 +1505,15 @@ bisect_left(Py_ssize_t *a, Py_ssize_t lo, Py_ssize_t hi, Py_ssize_t x)
 static PyObject *
 Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 {
-    Lattice *lattice = (Lattice *)self;
+    // printf("asserting consistent\n");
+    Lattice *L = (Lattice *)self;
     Py_ssize_t N = Py_SIZE(self);
-    Py_ssize_t R = lattice->rank;
+    Py_ssize_t R = L->rank;
     assert(R <= N);
-    PyObject **basis = lattice->basis;
+    PyObject **basis = L->basis;
 
-    Py_ssize_t nzc = lattice->num_zero_columns;
-    Py_ssize_t *zero_columns = lattice->zero_columns;
+    Py_ssize_t nzc = L->num_zero_columns;
+    Py_ssize_t *zero_columns = L->zero_columns;
     for (Py_ssize_t k = 1; k < nzc; k++) {
         if (!(zero_columns[k] > zero_columns[k-1])) {
             PyErr_SetString(PyExc_AssertionError, "zero_columns not increasing");
@@ -1528,7 +1534,7 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
         }
     }
 
-    Py_ssize_t *row_to_pivot = lattice->row_to_pivot;
+    Py_ssize_t *row_to_pivot = L->row_to_pivot;
     for (Py_ssize_t i = 0; i < R; i++) {
         if (Py_SIZE(basis[i]) != N) {
             PyErr_SetString(PyExc_AssertionError, "vector size mismatch");
@@ -1553,9 +1559,23 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
             PyErr_SetString(PyExc_AssertionError, "row_to_pivot too small");
             return NULL;
         }
+        Py_ssize_t nze = L->nonzero_end_in_row[i];
+        if (!(j < nze)) {
+            PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row inconsistent");
+            return NULL;
+        }
+        for (Py_ssize_t j = nze; j < N; j++) {
+            if (!TagInt_is_zero(Vector_get_vec(basis[i])[j])) {
+                PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row too small");
+                return NULL;
+            }
+        }
+        if (TagInt_is_zero(Vector_get_vec(basis[i])[nze-1])) {
+            PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row too large");
+            return NULL;
+        }
     }
-
-    Py_ssize_t *col_to_pivot = lattice->col_to_pivot;
+    Py_ssize_t *col_to_pivot = L->col_to_pivot;
     Py_ssize_t prev_i = -1;
     for (Py_ssize_t j = 0; j < N; j++) {
         Py_ssize_t i = col_to_pivot[j];
@@ -1612,15 +1632,67 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
             }
         }
     }
+
+    PyObject *zero = PyLong_FromLong(0);
+    for (Py_ssize_t i = L->first_HNF_row; i < R; i++) {
+        TagInt *above_row = Vector_get_vec(basis[i]);
+        for (Py_ssize_t ii = i + 1; ii < R; ii++) {
+            Py_ssize_t jj = row_to_pivot[ii];
+            PyObject *pivot = TagInt_to_object(Vector_get_vec(basis[ii])[jj]);
+            if (pivot == NULL) {
+                Py_DECREF(zero);
+                return NULL;
+            }
+            int zero_lt_pivot = pylong_lt(zero, pivot);
+            if (zero_lt_pivot != 1) {
+                if (zero_lt_pivot == 0) {
+                    PyErr_SetString(PyExc_AssertionError, "HNF pivot wasn't positive");
+                }
+                Py_DECREF(zero);
+                Py_DECREF(pivot);
+                return NULL;
+            }
+            PyObject *above = TagInt_to_object(above_row[jj]);
+            if (above == NULL) {
+                Py_DECREF(zero);
+                Py_DECREF(pivot);
+                return NULL;
+            }
+            int above_lt_zero = pylong_lt(above, zero);
+            if (above_lt_zero != 0) {
+                if (above_lt_zero == 1) {
+                    PyErr_SetString(PyExc_AssertionError, "HNF entry above pivot was negative");
+                }
+                Py_DECREF(zero);
+                Py_DECREF(pivot);
+                Py_DECREF(above);
+                return NULL;
+            }
+            int above_lt_pivot = pylong_lt(above, pivot);
+            if (above_lt_pivot != 1) {
+                if (above_lt_pivot == 0) {
+                    PyErr_SetString(PyExc_AssertionError, "HNF entry above pivot was too large");
+                }
+                Py_DECREF(zero);
+                Py_DECREF(pivot);
+                Py_DECREF(above);
+                return NULL;
+            }
+            Py_DECREF(pivot);
+            Py_DECREF(above);
+        }
+    }
+    Py_DECREF(zero);
     Py_RETURN_NONE;
 }
 
 static PyObject *
-Lattice_new_impl(PyTypeObject *type, Py_ssize_t N)
+Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
 {
     Py_ssize_t *zero_columns = NULL;
     Py_ssize_t *col_to_pivot = NULL;
     Py_ssize_t *row_to_pivot = NULL;
+    Py_ssize_t *nonzero_end_in_row = NULL;
     if (!(zero_columns = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
         goto error;
     }
@@ -1628,6 +1700,9 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N)
         goto error;
     }
     if (!(row_to_pivot = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
+        goto error;
+    }
+    if (!(nonzero_end_in_row = PyMem_Calloc(N, sizeof(Py_ssize_t)))) {
         goto error;
     }
     Lattice *self = (Lattice *)type->tp_alloc(type, N);
@@ -1644,90 +1719,90 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N)
     }
     self->row_to_pivot = row_to_pivot;
     self->col_to_pivot = col_to_pivot;
+    self->nonzero_end_in_row = nonzero_end_in_row;
+    self->HNF_policy = HNF_policy;
+    self->first_HNF_row = 0;
     return (PyObject *)self;
 error:
     PyMem_Free(zero_columns);
     PyMem_Free(col_to_pivot);
     PyMem_Free(row_to_pivot);
-    return NULL;
+    PyMem_Free(nonzero_end_in_row);
+    return PyErr_NoMemory();
 }
 
 static PyObject *
-Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
-    if (kwds != NULL && PyDict_GET_SIZE(kwds) > 0) {
-        PyErr_SetString(PyExc_TypeError, "Lattice(N) takes no keyword arguments.");
-        return NULL;
-    }
-    if (PyTuple_GET_SIZE(args) != 1) {
-        PyErr_SetString(PyExc_TypeError, "Lattice(N) takes exactly one argument");
-        return NULL;
-    }
-    PyObject *arg = PyTuple_GET_ITEM(args, 0);
-    if (!PyLong_Check(arg)) {
-        PyErr_SetString(PyExc_TypeError, "Lattice(N) argument must be an integer");
-        return NULL;
-    }
-    Py_ssize_t N = PyLong_AsSsize_t(arg);
-    if (N == -1 && PyErr_Occurred()) {
+Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
+    static char *kwlist[] = {"", "HNF_policy", NULL};
+    Py_ssize_t N;
+    int HNF_policy = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "n|i", kwlist, &N, &HNF_policy)) {
         return NULL;
     }
     if (N < 0) {
         PyErr_SetString(PyExc_ValueError, "Lattice(N) argument must be nonnegative");
         return NULL;
     }
-    return Lattice_new_impl(type, N);
+    if (!(0 <= HNF_policy && HNF_policy <= 6)) {
+        PyErr_SetString(PyExc_ValueError, "unknown HNF_policy");
+        return NULL;
+    }
+    return Lattice_new_impl(type, N, HNF_policy);
 }
 
 static PyObject *
 Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     assert(Py_TYPE(self) == &Lattice_Type);
-    Lattice *self_lattice = (Lattice *)self;
-    Py_ssize_t R = self_lattice->rank;
+    Lattice *L = (Lattice *)self;
+    Py_ssize_t R = L->rank;
     Py_ssize_t N = Py_SIZE(self);
-    Lattice *copy = (Lattice *)Lattice_new_impl(Py_TYPE(self), N);
+    Lattice *copy = (Lattice *)Lattice_new_impl(Py_TYPE(self), N, L->HNF_policy);
     if (copy == NULL) {
         return NULL;
     }
     for (Py_ssize_t i = 0; i < R; i++) {
-        PyObject *v = Vector_copy(self_lattice->basis[i], NULL);
+        PyObject *v = Vector_copy(L->basis[i], NULL);
         if (v == NULL) {
             Py_DECREF(copy);
             return NULL;
         }
         copy->basis[i] = v;
-        copy->row_to_pivot[i] = self_lattice->row_to_pivot[i];
+        copy->row_to_pivot[i] = L->row_to_pivot[i];
+        copy->nonzero_end_in_row[i] = L->nonzero_end_in_row[i];
         copy->rank++;
     }
     for (Py_ssize_t j = 0; j < N; j++) {
-        copy->col_to_pivot[j] = self_lattice->col_to_pivot[j];
+        copy->col_to_pivot[j] = L->col_to_pivot[j];
     }
-    Py_ssize_t nzc = self_lattice->num_zero_columns;
+    Py_ssize_t nzc = L->num_zero_columns;
     copy->num_zero_columns = nzc;
     for (Py_ssize_t k = 0; k < nzc; k++) {
-        copy->zero_columns[k] = self_lattice->zero_columns[k];
+        copy->zero_columns[k] = L->zero_columns[k];
     }
+    copy->first_HNF_row = L->first_HNF_row;
     return (PyObject *)copy;
 }
 
 static int
-Lattice_contains_loop(Lattice *self, TagInt *vec, Py_ssize_t j0)
+Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
 {
-    Py_ssize_t N = Py_SIZE(self);
+    Py_ssize_t N = Py_SIZE(L);
     for (Py_ssize_t j = j0; j < N; j++) {
         if (TagInt_is_zero(vec[j])) {
             continue;
         }
-        Py_ssize_t i = self->col_to_pivot[j];
+        Py_ssize_t i = L->col_to_pivot[j];
         if (i == -1) {
             // No pivot here to zero out this nonzero vec entry.
             return 0;
         }
-        TagInt *row = Vector_get_vec(self->basis[i]);
+        TagInt *row = Vector_get_vec(L->basis[i]);
         TagInt *pa = &row[j];
         TagInt *pb = &vec[j];
         TagInt a = *pa, b = *pb;
         assert(!TagInt_is_zero(a));
         assert(!TagInt_is_zero(b));
+        Py_ssize_t nze = L->nonzero_end_in_row[i];
 #if USE_FAST_PATHS
         if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
             intptr_t ai = a.bits/2, bi = b.bits/2;
@@ -1737,7 +1812,7 @@ Lattice_contains_loop(Lattice *self, TagInt *vec, Py_ssize_t j0)
             intptr_t q = bi / ai;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
-            if (row_op_impl_with_intptr(pa, pb, N-j, neg_q, &neg_q_obj)) {
+            if (row_op_impl_with_intptr(pa, pb, nze-j, neg_q, &neg_q_obj)) {
                 Py_XDECREF(neg_q_obj);
                 return -1;
             }
@@ -1781,7 +1856,7 @@ Lattice_contains_loop(Lattice *self, TagInt *vec, Py_ssize_t j0)
             return -1;
         }
         // This is doing "vec -= q * row"
-        if (row_op_impl_with_objects(pa, pb, N-j, neg_q)) {
+        if (row_op_impl_with_objects(pa, pb, nze-j, neg_q)) {
             Py_DECREF(neg_q);
             return -1;
         }
@@ -1854,28 +1929,44 @@ Lattice_contains(PyObject *self, PyObject *other)
     return Lattice_contains_impl((Lattice *)self, other, 0);
 }
 
-static void
-Lattice_insert_vector_with_pivot(Lattice *self, PyObject *v, Py_ssize_t j)
-{    
-    Py_ssize_t R = self->rank;
-    PyObject **basis = self->basis;
-    Py_ssize_t *row_to_pivot = self->row_to_pivot;
-    Py_ssize_t *col_to_pivot = self->col_to_pivot;
+static Py_ssize_t
+Lattice_insert_vector_with_pivot(Lattice *L, PyObject *v, Py_ssize_t j)
+{
+    assert(L->first_HNF_row <= L->rank);
+
+    Py_ssize_t R = L->rank;
+    PyObject **basis = L->basis;
+    Py_ssize_t *row_to_pivot = L->row_to_pivot;
+    Py_ssize_t *col_to_pivot = L->col_to_pivot;
+    Py_ssize_t *nonzero_end_in_row = L->nonzero_end_in_row;
     Py_ssize_t where = bisect_left(row_to_pivot, 0, R, j);
+    assert(0 <= where && where <= R);
+    assert(where == 0 || row_to_pivot[where-1] < j);
+    assert(where == R || row_to_pivot[where] > j);
+    TagInt *vec = Vector_get_vec(v);
+
+    L->rank = R + 1;
+    Py_ssize_t nze = Py_SIZE(L);
+    while (nze > j && TagInt_is_zero(vec[nze-1])) {
+        nze--;
+    }
+    assert(nze > j);
+
     // shift all the later rows down
-    self->rank = R + 1;
     for (Py_ssize_t i = R; i > where; i--) {
         basis[i] = basis[i - 1];
         row_to_pivot[i] = row_to_pivot[i - 1];
+        nonzero_end_in_row[i] = nonzero_end_in_row[i - 1];
         assert(col_to_pivot[row_to_pivot[i]] == i - 1);
         col_to_pivot[row_to_pivot[i]] = i;
     }
     basis[where] = v;
     row_to_pivot[where] = j;
     col_to_pivot[j] = where;
-    Py_ssize_t *zero_columns = self->zero_columns;
-    Py_ssize_t nzc = self->num_zero_columns;
-    TagInt *vec = Vector_get_vec(v);
+    nonzero_end_in_row[where] = nze;
+
+    Py_ssize_t *zero_columns = L->zero_columns;
+    Py_ssize_t nzc = L->num_zero_columns;
     Py_ssize_t dest, src;
     dest = src = bisect_left(zero_columns, 0, nzc, j);
     for (; src < nzc; src++) {
@@ -1884,7 +1975,11 @@ Lattice_insert_vector_with_pivot(Lattice *self, PyObject *v, Py_ssize_t j)
             dest++;
         }
     }
-    self->num_zero_columns = dest;
+    L->num_zero_columns = dest;
+    assert(L->first_HNF_row <= R);
+    L->first_HNF_row = Py_MAX(L->first_HNF_row, where) + 1;
+    assert(L->first_HNF_row <= L->rank);
+    return where;
 }
 
 static void
@@ -1897,199 +1992,277 @@ do_swap(TagInt *va, TagInt *vb, Py_ssize_t N)
     }
 }
 
-static bool
-make_first_entry_zero_with_intptr(TagInt *pr, TagInt *pv, Py_ssize_t N_j)
+static void
+fix_nonzero_end_in_row(Lattice *L, Py_ssize_t i)
 {
-    assert(!TagInt_is_pointer(pr[0]));
-    assert(!TagInt_is_pointer(pv[0]));
-    // We can operate directly on bits! (no need to divide by 2)
-    intptr_t row0 = pr[0].bits, vec0 = pv[0].bits;
-    assert(row0 != 0);
-    assert(vec0 != 0);
-    assert(row0 != INTPTR_MIN);
-    assert(vec0 != INTPTR_MIN);
-#if USE_FAST_PATHS
-    if (vec0 % row0 == 0) {
-        intptr_t q = vec0 / row0;
-        assert(q != INTPTR_MIN);
-        // printf("b//a=%lld//%lld=%lld\n", vec0/2, row0/2, q);
-        intptr_t neg_q = -q;
-        PyObject *neg_q_obj = NULL;
-        if (row_op_impl_with_intptr(pr, pv, N_j, neg_q, &neg_q_obj)) {
-            Py_XDECREF(neg_q_obj);
-            return true;
-        }
-        Py_XDECREF(neg_q_obj);
-        assert(TagInt_is_zero(pv[0]));
-        return false;
+    // Update nonzero_end_in_row
+    TagInt *row = Vector_get_vec(L->basis[i]);
+    Py_ssize_t nze = Py_SIZE(L);
+    while (nze > 0 && TagInt_is_zero(row[nze-1])) {
+        nze--;
     }
-    if (row0 % vec0 == 0) {
-        do_swap(pr, pv, N_j);
-        intptr_t q = row0 / vec0;
-        assert(q != INTPTR_MIN);
-        // printf("a//b=%lld//%lld=%lld\n", row0/2, vec0/2, q);
-        intptr_t neg_q = -q;
-        PyObject *neg_q_obj = NULL;
-        if (row_op_impl_with_intptr(pr, pv, N_j, neg_q, &neg_q_obj)) {
-            Py_XDECREF(neg_q_obj);
-            return true;
-        }
-        Py_XDECREF(neg_q_obj);
-        assert(TagInt_is_zero(pv[0]));
-        return false;
+    assert(nze > 0);
+    L->nonzero_end_in_row[i] = nze;
+}
+
+static void
+modified_row(Lattice *L, Py_ssize_t i)
+{
+    // Update first_HNF_row
+    if (i >= L->first_HNF_row) {
+        L->first_HNF_row = i + 1;
+        assert(L->first_HNF_row <= L->rank);
     }
-#endif
-    intptr_t xyg[3];
-    xgcd_using_intptr(row0, vec0, xyg);
-    intptr_t x = xyg[0], y = xyg[1], g = xyg[2];
-    // printf("%lld*%lld + %lld*%lld = %lld\n", x, row0, y, vec0, g);
-    intptr_t abcd[4] = {x, y, -(vec0/g), row0/g};
-    PyObject *abcd_obj[4] = {NULL, NULL, NULL, NULL};
-    bool err = generalized_row_op_impl_with_intptr(pr, pv, N_j, abcd, abcd_obj);
-    for (int i = 0; i < 4; i++) {
-        Py_XDECREF(abcd_obj[i]);
-    }
-    if (err) {
-        return true;
-    }
-    assert(TagInt_is_zero(pv[0]));
-    return false;
+    fix_nonzero_end_in_row(L, i);
 }
 
 static bool
-make_first_entry_zero_with_objects(TagInt *pr, TagInt *pv, Py_ssize_t N_j)
+make_entry_zero(PyObject *v, Lattice *L, Py_ssize_t i, Py_ssize_t j)
 {
-    PyObject *row0 = TagInt_to_object(pr[0]);
-    if (row0 == NULL) {
-        return true;
-    }
-    PyObject *vec0 = TagInt_to_object(pv[0]);
-    if (vec0 == NULL) {
-        Py_DECREF(row0);
-        return true;
-    }
-#if USE_FAST_PATHS
-    PyObject *vec0_mod_row0 = pylong_remainder(vec0, row0);
-    if (vec0_mod_row0 == NULL) {
-        Py_DECREF(row0);
-        Py_DECREF(vec0);
-        return true;
-    }
-    bool bool_vec0_mod_row0 = pylong_bool(vec0_mod_row0);
-    Py_DECREF(vec0_mod_row0);
-    if (!bool_vec0_mod_row0) {
-        PyObject *q = pylong_floor_divide(vec0, row0);
-        Py_DECREF(row0);
-        Py_DECREF(vec0);
-        if (q == NULL) {
-            return true;
-        }
-        PyObject *neg_q = pylong_negative(q);
-        Py_DECREF(q);
-        if (neg_q == NULL) {
-            return true;
-        }
-        bool err = row_op_impl_with_objects(pr, pv, N_j, neg_q);
-        Py_DECREF(neg_q);
-        return err;
-    }
-#endif
-#if USE_FAST_PATHS
-    PyObject *row0_mod_vec0 = pylong_remainder(row0, vec0);
-    if (row0_mod_vec0 == NULL) {
-        Py_DECREF(row0);
-        Py_DECREF(vec0);
-        return true;
-    }
-    bool bool_row0_mod_vec0 = pylong_bool(row0_mod_vec0);
-    Py_DECREF(row0_mod_vec0);
-    if (!bool_row0_mod_vec0) {
-        do_swap(pr, pv, N_j);
-        PyObject *q = pylong_floor_divide(row0, vec0);
-        Py_DECREF(row0);
-        Py_DECREF(vec0);
-        if (q == NULL) {
-            return true;
-        }
-        PyObject *neg_q = pylong_negative(q);
-        Py_DECREF(q);
-        if (neg_q == NULL) {
-            return true;
-        }
-        bool err = row_op_impl_with_objects(pr, pv, N_j, neg_q);
-        Py_DECREF(neg_q);
-        return err;
-    }
-#endif
-    PyObject *xyg[3];
-    if (xgcd_using_objects(row0, vec0, xyg)) {
-        Py_DECREF(row0); Py_DECREF(vec0);
-        return true;
-    }
-    PyObject *x = xyg[0], *y = xyg[1], *g = xyg[2];
-    PyObject *vec0_g = pylong_floor_divide(vec0, g);
-    if (vec0_g == NULL) {
-        Py_DECREF(row0); Py_DECREF(vec0);
-        Py_DECREF(x); Py_DECREF(y); Py_DECREF(g);
-        return true;
-    }
-    PyObject *row0_g = pylong_floor_divide(row0, g);
-    if (row0_g == NULL) {
-        Py_DECREF(row0); Py_DECREF(vec0);
-        Py_DECREF(x); Py_DECREF(y); Py_DECREF(g);
-        Py_DECREF(vec0_g);
-        return true;
-    }
-    PyObject *neg_vec0_g = pylong_negative(vec0_g);
-    if (neg_vec0_g == NULL) {
-        Py_DECREF(row0); Py_DECREF(vec0);
-        Py_DECREF(x); Py_DECREF(y); Py_DECREF(g);
-        Py_DECREF(vec0_g); Py_DECREF(row0_g);
-        return true;
-    }
-    PyObject *abcd[4] = {x, y, neg_vec0_g, row0_g};
-    bool err = generalized_row_op_impl_with_objects(pr, pv, N_j, abcd);
-    Py_DECREF(row0); Py_DECREF(vec0);
-    Py_DECREF(x); Py_DECREF(y); Py_DECREF(g);
-    Py_DECREF(vec0_g); Py_DECREF(row0_g); Py_DECREF(neg_vec0_g);
-    return err;
-}
-
-static bool
-make_first_entry_zero(TagInt *pr, TagInt *pv, Py_ssize_t N_j)
-{
-    assert(!TagInt_is_zero(*pr));
-    assert(!TagInt_is_zero(*pv));
-#if USE_FAST_PATHS
-    if (!TagInt_is_pointer(*pr) && !TagInt_is_pointer(*pv)
-        && pr[0].bits != INTPTR_MIN && pv[0].bits != INTPTR_MIN)
-    {
-        return make_first_entry_zero_with_intptr(pr, pv, N_j);
-    }
-#endif
-    return make_first_entry_zero_with_objects(pr, pv, N_j);
-}
-
-static bool
-Lattice_add_vector_steal_impl(Lattice *self, PyObject *v, Py_ssize_t j0)
-{
+    Py_ssize_t N = Py_SIZE(L);
     TagInt *vec = Vector_get_vec(v);
-    Py_ssize_t N = Py_SIZE(self);
-    for (Py_ssize_t j = j0; j < N; j++) {
-        if (TagInt_is_zero(vec[j])) {
-            continue;
-        }
-        Py_ssize_t i = self->col_to_pivot[j];
-        if (i == -1) {
-            // steals v
-            Lattice_insert_vector_with_pivot(self, v, j);
+    TagInt *row = Vector_get_vec(L->basis[i]);
+    Py_ssize_t nze = L->nonzero_end_in_row[i];
+#if USE_FAST_PATHS
+    if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
+        intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+        assert(rowj != 0);
+        assert(vecj != 0);
+        if (vecj % rowj == 0) {
+            intptr_t q = vecj / rowj;
+            // printf("b//a=%lld//%lld=%lld\n", vecj, rowj, q);
+            intptr_t neg_q = -q;
+            PyObject *neg_q_obj = NULL;
+            if (row_op_impl_with_intptr(&row[j], &vec[j], nze - j, neg_q, &neg_q_obj)) {
+                Py_XDECREF(neg_q_obj);
+                return true;
+            }
+            Py_XDECREF(neg_q_obj);
+            assert(TagInt_is_zero(vec[j]));
             return false;
         }
-        TagInt *row = Vector_get_vec(self->basis[i]);
-        if (make_first_entry_zero(&row[j], &vec[j], N-j)) {
-            Py_DECREF(v);
+        if (rowj % vecj == 0) {
+            do_swap(&row[j], &vec[j], N - j);
+            intptr_t q = rowj / vecj;
+            assert(q != INTPTR_MIN);
+            // printf("a//b=%lld//%lld=%lld\n", rowj, vecj, q);
+            intptr_t neg_q = -q;
+            PyObject *neg_q_obj = NULL;
+            if (row_op_impl_with_intptr(&row[j], &vec[j], N - j, neg_q, &neg_q_obj)) {
+                Py_XDECREF(neg_q_obj);
+                return true;
+            }
+            Py_XDECREF(neg_q_obj);
+            assert(TagInt_is_zero(vec[j]));
+            modified_row(L, i);
+            assert(L->first_HNF_row <= L->rank);
+            return false;
+        }
+        intptr_t xyg[3];
+        xgcd_using_intptr(rowj, vecj, xyg);
+        intptr_t x = xyg[0], y = xyg[1], g = xyg[2];
+        // printf("%lld*%lld + %lld*%lld = %lld\n", x, row0, y, vec0, g);
+        intptr_t abcd[4] = {x, y, -(vecj/g), rowj/g};
+        PyObject *abcd_obj[4] = {NULL, NULL, NULL, NULL};
+        bool err = generalized_row_op_impl_with_intptr(&row[j], &vec[j], N - j, abcd, abcd_obj);
+        for (int i = 0; i < 4; i++) {
+            Py_XDECREF(abcd_obj[i]);
+        }
+        if (err) {
             return true;
         }
+        assert(TagInt_is_zero(vec[j]));
+        modified_row(L, i);
+        return false;
+    }
+#endif
+    PyObject *rowj = TagInt_to_object(row[j]);
+    if (rowj == NULL) {
+        return true;
+    }
+    PyObject *vecj = TagInt_to_object(vec[j]);
+    if (vecj == NULL) {
+        Py_DECREF(rowj);
+        return true;
+    }
+    PyObject *vecj_mod_rowj = pylong_remainder(vecj, rowj);
+    if (vecj_mod_rowj == NULL) {
+        Py_DECREF(rowj);
+        Py_DECREF(vecj);
+        return true;
+    }
+    bool bool_vecj_mod_rowj = pylong_bool(vecj_mod_rowj);
+    Py_DECREF(vecj_mod_rowj);
+    if (!bool_vecj_mod_rowj) {
+        PyObject *q = pylong_floor_divide(vecj, rowj);
+        Py_DECREF(rowj);
+        Py_DECREF(vecj);
+        if (q == NULL) {
+            return true;
+        }
+        PyObject *neg_q = pylong_negative(q);
+        Py_DECREF(q);
+        if (neg_q == NULL) {
+            return true;
+        }
+        bool err = row_op_impl_with_objects(&row[j], &vec[j], nze - j, neg_q);
+        Py_DECREF(neg_q);
+        return err;
+    }
+    PyObject *rowj_mod_vecj = pylong_remainder(rowj, vecj);
+    if (rowj_mod_vecj == NULL) {
+        Py_DECREF(rowj);
+        Py_DECREF(vecj);
+        return true;
+    }
+    bool bool_rowj_mod_vecj = pylong_bool(rowj_mod_vecj);
+    Py_DECREF(rowj_mod_vecj);
+    if (!bool_rowj_mod_vecj) {
+        do_swap(&row[j], &vec[j], N - j);
+        PyObject *q = pylong_floor_divide(rowj, vecj);
+        Py_DECREF(rowj);
+        Py_DECREF(vecj);
+        if (q == NULL) {
+            return true;
+        }
+        PyObject *neg_q = pylong_negative(q);
+        Py_DECREF(q);
+        if (neg_q == NULL) {
+            return true;
+        }
+        bool err = row_op_impl_with_objects(&row[j], &vec[j], N - j, neg_q);
+        Py_DECREF(neg_q);
+        modified_row(L, i);
+        return err;
+    }
+    // start using the error label here
+    PyObject *xyg[3] = {NULL, NULL, NULL};
+    PyObject *x=NULL, *y=NULL, *g=NULL;
+    PyObject *vecj_g=NULL, *rowj_g=NULL, *neg_vecj_g=NULL;
+    if (xgcd_using_objects(rowj, vecj, xyg)) {
+        goto error;
+    }
+    x = xyg[0]; y = xyg[1]; g = xyg[2];
+    if (!(vecj_g = pylong_floor_divide(vecj, g))) {
+        goto error;
+    }
+    if (!(rowj_g = pylong_floor_divide(rowj, g))) {
+        goto error;
+    }
+    if (!(neg_vecj_g = pylong_negative(vecj_g))) {
+        goto error;
+    }
+    PyObject *abcd[4] = {x, y, neg_vecj_g, rowj_g};
+    if (generalized_row_op_impl_with_objects(&row[j], &vec[j], N - j, abcd)) {
+        goto error;
+    }
+    Py_DECREF(rowj); Py_DECREF(vecj);
+    Py_DECREF(x); Py_DECREF(y); Py_DECREF(g);
+    Py_DECREF(vecj_g); Py_DECREF(rowj_g); Py_DECREF(neg_vecj_g);
+    modified_row(L, i);
+    return false;
+error:
+    Py_DECREF(rowj); Py_DECREF(vecj);
+    Py_XDECREF(x); Py_XDECREF(y); Py_XDECREF(g);
+    Py_XDECREF(vecj_g); Py_DECREF(rowj_g); Py_DECREF(neg_vecj_g);
+    return true;
+}
+
+static bool
+Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix);
+
+static bool
+Lattice_apply_HNF_policy(Lattice *L, Py_ssize_t i, Py_ssize_t j)
+{
+    // printf("applying policy %i\n", L->HNF_policy);
+    switch (L->HNF_policy) {
+    case 0: // NEVER
+        return false;
+    case 1: // ALWAYS
+        return Lattice_HNFify_impl(L, 0);
+    case 2: // STARTING_AT_INSERTED
+        return Lattice_HNFify_impl(L, i);
+    case 3: // SMART_STARTING_AT_INSERTED
+        {
+            Py_ssize_t tail = Py_SIZE(L) - j - 1;
+            Py_ssize_t num_pivots_for_tail = L->rank - i - 1;
+            if (num_pivots_for_tail > tail/2) {
+                return Lattice_HNFify_impl(L, i);
+            }
+            return false;
+        }
+    case 4: // SMARTER_STARTING_AT_INSERTED
+        {
+            TagInt *vec = Vector_get_vec(L->basis[i]);
+            Py_ssize_t tail = 0;
+            Py_ssize_t num_pivots_for_tail = 0;
+            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
+                if (!TagInt_is_zero(vec[jj])) {
+                    tail++;
+                    if (L->row_to_pivot[jj] < -1) {
+                        num_pivots_for_tail++;
+                    }
+                }
+            }
+            if (num_pivots_for_tail > tail/2) {
+                return Lattice_HNFify_impl(L, i);
+            }
+            return false;
+        }
+    case 5: // IF_INSERTED_HAS_BIGINT
+        {
+            bool has_bigint = false;
+            TagInt *vec = Vector_get_vec(L->basis[i]);
+            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
+                if (TagInt_is_pointer(vec[jj])) {
+                    has_bigint = true;
+                    break;
+                }
+            }
+            if (has_bigint) {
+                return Lattice_HNFify_impl(L, 0);
+            }
+            return false;
+        }
+    case 6: // STARTING_AT_SELECTED_IF_INSERTED_HAS_BIGINT
+        {
+            bool has_bigint = false;
+            TagInt *vec = Vector_get_vec(L->basis[i]);
+            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
+                if (TagInt_is_pointer(vec[jj])) {
+                    has_bigint = true;
+                    break;
+                }
+            }
+            if (has_bigint) {
+                return Lattice_HNFify_impl(L, i);
+            }
+            return false;
+        }
+    default:
+        Py_UNREACHABLE();
+    }
+}
+
+static bool
+Lattice_add_vector_steal_impl(Lattice *L, PyObject *v)
+{
+    Py_ssize_t N = Py_SIZE(L);
+    for (Py_ssize_t j = 0; j < N; j++) {
+        if (TagInt_is_zero(Vector_get_vec(v)[j])) {
+            continue;
+        }
+        Py_ssize_t i = L->col_to_pivot[j];
+        if (i != -1) {
+            if (make_entry_zero(v, L, i, j)) {
+                Py_DECREF(v);
+                return true;
+            }
+            continue;
+        }
+        // steals v
+        i = Lattice_insert_vector_with_pivot(L, v, j);
+        return Lattice_apply_HNF_policy(L, i, j);
     }
     // The whole vector has been zero-ed out. Nothing to add.
     Py_DECREF(v);
@@ -2104,7 +2277,7 @@ Lattice_add_vector_impl(Lattice *self, PyObject *other)
     if (other_copy == NULL)  {
         return true;
     }
-    return Lattice_add_vector_steal_impl(self, other_copy, 0);
+    return Lattice_add_vector_steal_impl(self, other_copy);
 }
 
 
@@ -2356,26 +2529,29 @@ Lattice_get_col_to_pivot(PyObject *self, PyObject *Py_UNUSED(ignored))
 static bool
 make_pivots_positive(Lattice *L)
 {
-    Py_ssize_t R = L->rank;
     Py_ssize_t N = Py_SIZE(L);
     PyObject *zero = PyLong_FromIntptr(0);
     if (zero == NULL) {
         return true;
     }
-    for (Py_ssize_t i = 0; i < R; i++) {
+    assert(L->first_HNF_row <= L->rank);
+    for (Py_ssize_t i = 0; i < L->first_HNF_row; i++) {
         TagInt *row = Vector_get_vec(L->basis[i]);
-        Py_ssize_t j0 = L->row_to_pivot[i];
-        TagInt pivot = row[j0];
+        Py_ssize_t j = L->row_to_pivot[i];
+        TagInt pivot = row[j];
+        // printf("making pivot [%ld/%ld,%ld]=%ld positive\n", i, L->rank, j, N, row[j].bits/2);
         assert(!TagInt_is_zero(pivot));
         int neg = TagInt_is_negative(pivot, zero);
         if (neg == -1) {
             goto error;
         }
         if (neg) {
-            if (Vector_negate_impl(&row[j0], N-j0)) {
+            Py_ssize_t end_j = L->nonzero_end_in_row[i];
+            if (Vector_negate_impl(&row[j], end_j - j)) {
                 goto error;
             }
         }
+        // printf("made pivot [%ld/%ld,%ld]=%ld positive\n", i, L->rank, j, N, row[j].bits/2);
     }
     return false;
 error:
@@ -2383,24 +2559,19 @@ error:
     return true;
 }
 
-static PyObject *
-Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
+static bool
+Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
 {
-    Lattice *L = (Lattice *)self;
+    if (first_row_to_fix >= L->first_HNF_row) {
+        // printf("already HNFified enough.\n");
+        return false;
+    }
+    // printf("still work to do.\n");
     if (make_pivots_positive(L)) {
-        return NULL;
+        return true;
     }
+    // printf("made pivots positive\n");
     Py_ssize_t R = L->rank;
-    Py_ssize_t N = Py_SIZE(self);
-
-    // counterpart to row_to_pivot. Makes 
-    Py_ssize_t *end_of_nonzeros_in_row = PyMem_Malloc(sizeof(Py_ssize_t) * R);
-    if (end_of_nonzeros_in_row == NULL) {
-        return NULL;
-    }
-    if (R >= 1) {
-        end_of_nonzeros_in_row[R - 1] = N;
-    }
 
     // The following tries to keep the entries small:
     // Work from the bottom-right corner of the matrix,
@@ -2413,12 +2584,14 @@ Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
     // basis[R-2] : 0 0 0 0 0 0 0 ... 0 0 p (HNF)   <-----using these two pivot rows
     // basis[R-1] : 0 0 0 0 0 0 0 ... 0 0 0 0 0 p   <--/
 
-    for (Py_ssize_t i = R - 2; i >= 0; i--) {
+    for (Py_ssize_t i = L->first_HNF_row - 1; i >= first_row_to_fix; i--) {
+        // printf("HNFifying at row %ld\n", i);
         TagInt *row_to_reduce = Vector_get_vec(L->basis[i]);
         for (Py_ssize_t ii = i + 1; ii < R; ii++) {
+            // printf("using pivot from row %ld\n", ii);
             TagInt *pivot_row = Vector_get_vec(L->basis[ii]);
             Py_ssize_t jj = L->row_to_pivot[ii];
-            Py_ssize_t jj_end = end_of_nonzeros_in_row[ii];
+            Py_ssize_t jj_end = L->nonzero_end_in_row[ii];
             TagInt pivot = pivot_row[jj];
             TagInt above = row_to_reduce[jj];
             if (TagInt_is_zero(above)) {
@@ -2480,18 +2653,26 @@ Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
             }
             Py_DECREF(neg_q_obj);
         }
-        Py_ssize_t new_j_end = N;
-        while (new_j_end > 0 && TagInt_is_zero(row_to_reduce[new_j_end - 1])) {
-            new_j_end--;
-        }
-        assert(new_j_end > 0);
-        end_of_nonzeros_in_row[i] = new_j_end;
+        // printf("done HNFifying at row %ld\n", i);
+        fix_nonzero_end_in_row(L, i);
+        // printf("fixed nonzero_end_in_row %ld\n", i);
     }
-    PyMem_Free(end_of_nonzeros_in_row);
-    Py_RETURN_NONE;
+    // printf("HNF established starting at row%ld\n", first_row_to_fix);
+    assert(first_row_to_fix <= L->rank);
+    L->first_HNF_row = first_row_to_fix;
+    return false;
 error:
-    PyMem_Free(end_of_nonzeros_in_row);
-    return NULL;
+    return true;
+}
+
+static PyObject *
+Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    Lattice *L = (Lattice *)self;
+    if (Lattice_HNFify_impl(L, 0)) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
 }
 
 static PyObject *
@@ -2509,10 +2690,12 @@ Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored)
         goto error;
     }
     Py_ssize_t result_index = 0;
-    if (!(delete_row = PyMem_Malloc(L->rank))) {
+    if (!(delete_row = PyMem_Malloc(L->rank)) ) {
+        PyErr_NoMemory();
         goto error;
     }
     if (!(delete_col = PyMem_Malloc(Py_SIZE(L)))) {
+        PyErr_NoMemory();
         goto error;
     }
     while (L->rank) {
@@ -2549,7 +2732,7 @@ Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored)
             }
         }
         // Transpose with these deletions
-        Lattice *next_L = (Lattice *)Lattice_new_impl(&Lattice_Type, L->rank - num_deletions);
+        Lattice *next_L = (Lattice *)Lattice_new_impl(&Lattice_Type, L->rank - num_deletions, L->HNF_policy);
         if (next_L == NULL) {
             goto error;
         }
@@ -2573,7 +2756,7 @@ Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored)
                 vindex++;
             }
             assert(vindex == Py_SIZE(v));
-            if (Lattice_add_vector_steal_impl(next_L, v, 0)) {
+            if (Lattice_add_vector_steal_impl(next_L, v)) {
                 Py_DECREF(next_L);
                 Py_DECREF(v);
                 goto error;

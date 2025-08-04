@@ -302,12 +302,12 @@ class TestLattice(unittest.TestCase):
                 vec0 = vecs[0] if vecs else zero
                 for vec in vecs:
                     mod.add_vector(vec)
-                    self.assertIn(vec, mod)
-                    self.assertIn(zero-vec, mod)
-                    self.assertIn(10*vec, mod)
-                    self.assertIn(vec0 + vec, mod)
-                    self.assertIn(3*vec0-100*vec, mod)
-                # mod._assert_consistent()
+                    mod._assert_consistent()
+                    self.assertIn(vec, mod, msg=vecs)
+                    self.assertIn(zero-vec, mod, msg=vecs)
+                    self.assertIn(10*vec, mod, msg=vecs)
+                    self.assertIn(vec0 + vec, mod, msg=vecs)
+                    self.assertIn(3*vec0-100*vec, mod, msg=vecs)
 
                 basis = mod.get_basis()
                 for to_remove in basis:
@@ -424,7 +424,7 @@ class TestLattice(unittest.TestCase):
         self.assertEqual(
             [vec.tolist() for vec in L.get_basis()],
             [[   5,   0,  -5, -10, -15],
-            [   0,   1,   2,   3,   4]],
+             [   0,   1,   2,   3,   4]],
         )
 
         L = Lattice(3)
