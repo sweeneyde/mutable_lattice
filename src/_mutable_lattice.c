@@ -181,7 +181,7 @@ intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res) {
 /*********************************************************************/
 /* TagInt is a tagged union of:                                      */
 /*     * signed intptr_t, packed inline with a 0 LSB appended        */
-/*     * PyLongObject pointer, with a 1 LSB appended                 */
+/*     * PyLongObject pointer, with a 1 LSB set                      */
 /*********************************************************************/
 
 typedef struct {
@@ -1741,6 +1741,10 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
 }
 
 static PyObject *
+Lattice_full(PyTypeObject *type, PyObject *arg) {
+}
+
+static PyObject *
 Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
@@ -1787,36 +1791,33 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
             return 0;
         }
         TagInt *row = Vector_get_vec(L->basis[i]);
-        TagInt *pa = &row[j];
-        TagInt *pb = &vec[j];
-        TagInt a = *pa, b = *pb;
-        assert(!TagInt_is_zero(a));
-        assert(!TagInt_is_zero(b));
         Py_ssize_t nze = L->nonzero_end_in_row[i];
 #if USE_FAST_PATHS
-        if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
-            intptr_t ai = a.bits/2, bi = b.bits/2;
-            if (bi % ai != 0) {
+        if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
+            intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+            assert(rowj != 0);
+            assert(vecj != 0);
+            if (vecj % rowj != 0) {
                 return 0;
             }
-            intptr_t q = bi / ai;
+            intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
-            if (row_op_impl_with_intptr(pa, pb, nze-j, neg_q, &neg_q_obj)) {
+            if (row_op_impl_with_intptr(&row[j], &vec[j], nze-j, neg_q, &neg_q_obj)) {
                 Py_XDECREF(neg_q_obj);
                 return -1;
             }
             Py_XDECREF(neg_q_obj);
-            assert(TagInt_is_zero(*pb));
+            assert(TagInt_is_zero(vec[j]));
             continue;
         }
 #endif
-        PyObject *a_obj = TagInt_to_object(a);
+        PyObject *a_obj = TagInt_to_object(row[j]);
         if (a_obj == NULL) {
             return -1;
         }
-        PyObject *b_obj = TagInt_to_object(b);
-        if (a_obj == NULL) {
+        PyObject *b_obj = TagInt_to_object(vec[j]);
+        if (b_obj == NULL) {
             Py_DECREF(a_obj);
             return -1;
         }
@@ -1846,12 +1847,12 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
             return -1;
         }
         // This is doing "vec -= q * row"
-        if (row_op_impl_with_objects(pa, pb, nze-j, neg_q)) {
+        if (row_op_impl_with_objects(&row[j], &vec[j], nze-j, neg_q)) {
             Py_DECREF(neg_q);
             return -1;
         }
         Py_DECREF(neg_q);
-        assert(TagInt_is_zero(*pb));
+        assert(TagInt_is_zero(vec[j]));
     }
     // Everything became zero, so the vector is present.
     return 1;
@@ -1921,7 +1922,6 @@ static Py_ssize_t
 Lattice_insert_vector_with_pivot(Lattice *L, PyObject *v, Py_ssize_t j)
 {
     assert(L->first_HNF_row <= L->rank);
-
     Py_ssize_t R = L->rank;
     PyObject **basis = L->basis;
     Py_ssize_t *row_to_pivot = L->row_to_pivot;
@@ -1932,8 +1932,9 @@ Lattice_insert_vector_with_pivot(Lattice *L, PyObject *v, Py_ssize_t j)
     assert(where == 0 || row_to_pivot[where-1] < j);
     assert(where == R || row_to_pivot[where] > j);
     TagInt *vec = Vector_get_vec(v);
-
     L->rank = R + 1;
+    assert(L->rank <= Py_SIZE(L));
+
     Py_ssize_t nze = Py_SIZE(L);
     while (nze > j && TagInt_is_zero(vec[nze-1])) {
         nze--;
@@ -2007,6 +2008,7 @@ modified_row(Lattice *L, Py_ssize_t i)
 static bool
 make_entry_zero(PyObject *v, Lattice *L, Py_ssize_t i, Py_ssize_t j)
 {
+    // helper function for L.add_vector(v)
     Py_ssize_t N = Py_SIZE(L);
     TagInt *vec = Vector_get_vec(v);
     TagInt *row = Vector_get_vec(L->basis[i]);
@@ -2018,7 +2020,6 @@ make_entry_zero(PyObject *v, Lattice *L, Py_ssize_t i, Py_ssize_t j)
         assert(vecj != 0);
         if (vecj % rowj == 0) {
             intptr_t q = vecj / rowj;
-            // printf("b//a=%lld//%lld=%lld\n", vecj, rowj, q);
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
             if (row_op_impl_with_intptr(&row[j], &vec[j], nze - j, neg_q, &neg_q_obj)) {
@@ -2033,7 +2034,6 @@ make_entry_zero(PyObject *v, Lattice *L, Py_ssize_t i, Py_ssize_t j)
             do_swap(&row[j], &vec[j], N - j);
             intptr_t q = rowj / vecj;
             assert(q != INTPTR_MIN);
-            // printf("a//b=%lld//%lld=%lld\n", rowj, vecj, q);
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
             if (row_op_impl_with_intptr(&row[j], &vec[j], N - j, neg_q, &neg_q_obj)) {
@@ -2049,7 +2049,6 @@ make_entry_zero(PyObject *v, Lattice *L, Py_ssize_t i, Py_ssize_t j)
         intptr_t xyg[3];
         xgcd_using_intptr(rowj, vecj, xyg);
         intptr_t x = xyg[0], y = xyg[1], g = xyg[2];
-        // printf("%lld*%lld + %lld*%lld = %lld\n", x, row0, y, vec0, g);
         intptr_t abcd[4] = {x, y, -(vecj/g), rowj/g};
         PyObject *abcd_obj[4] = {NULL, NULL, NULL, NULL};
         bool err = generalized_row_op_impl_with_intptr(&row[j], &vec[j], N - j, abcd, abcd_obj);
@@ -2551,14 +2550,11 @@ static bool
 Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
 {
     if (first_row_to_fix >= L->first_HNF_row) {
-        // printf("already HNFified enough.\n");
         return false;
     }
-    // printf("still work to do.\n");
     if (make_pivots_positive(L)) {
         return true;
     }
-    // printf("made pivots positive\n");
     Py_ssize_t R = L->rank;
 
     // The following tries to keep the entries small:
@@ -2573,10 +2569,8 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
     // basis[R-1] : 0 0 0 0 0 0 0 ... 0 0 0 0 0 p   <--/
 
     for (Py_ssize_t i = L->first_HNF_row - 1; i >= first_row_to_fix; i--) {
-        // printf("HNFifying at row %ld\n", i);
         TagInt *row_to_reduce = Vector_get_vec(L->basis[i]);
         for (Py_ssize_t ii = i + 1; ii < R; ii++) {
-            // printf("using pivot from row %ld\n", ii);
             TagInt *pivot_row = Vector_get_vec(L->basis[ii]);
             Py_ssize_t jj = L->row_to_pivot[ii];
             Py_ssize_t jj_end = L->nonzero_end_in_row[ii];
@@ -2594,7 +2588,6 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
                 assert(pivot.bits/2 > 0);
                 intptr_t p = pivot.bits/2, a = above.bits/2;
                 intptr_t q = a / p;
-                // printf("Reducing M[%lld,%lld:%lld]=[%lld, ...] above M[%lld,%lld:%lld]=[%lld, ...]\n", i, jj, jj_end, a, ii, jj, jj_end, p);
                 if (a % p < 0) {
                     q -= 1; // floor division
                 }
@@ -2606,8 +2599,8 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
                 }
                 Py_XDECREF(neg_q_obj);
                 assert(0 <= row_to_reduce[jj].bits/2);
+                assert(!TagInt_is_pointer(row_to_reduce[jj]));
                 assert(row_to_reduce[jj].bits/2 < p);
-                // printf("Reduced to M[%lld,%lld]=%lld\n", i, jj, row_to_reduce[jj].bits/2);
                 continue;
             }
 #endif
@@ -2641,11 +2634,8 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
             }
             Py_DECREF(neg_q_obj);
         }
-        // printf("done HNFifying at row %ld\n", i);
         fix_nonzero_end_in_row(L, i);
-        // printf("fixed nonzero_end_in_row %ld\n", i);
     }
-    // printf("HNF established starting at row%ld\n", first_row_to_fix);
     assert(first_row_to_fix <= L->rank);
     L->first_HNF_row = first_row_to_fix;
     return false;
@@ -2687,8 +2677,7 @@ Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored)
         goto error;
     }
     while (L->rank) {
-        PyObject *hnf_result = Lattice_HNFify((PyObject *)L, NULL);
-        if (hnf_result == NULL) {
+        if (Lattice_HNFify_impl(L, 0)) {
             goto error;
         }
         // printf("got done HNFifying\n");
