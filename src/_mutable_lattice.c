@@ -298,7 +298,7 @@ static inline bool TagInt_add(TagInt a, TagInt b, TagInt *c) {
         if (!intptr_add_overflow(a.bits, b.bits, &c->bits)) {
             return false;
         }
-    } 
+    }
     // separate out this function to not inline.
     return _TagInt_add_with_objects(a, b, c);
 }
@@ -364,7 +364,7 @@ static inline bool TagInt_sub(TagInt a, TagInt b, TagInt *c) {
         if (!intptr_sub_overflow(a.bits, b.bits, &c->bits)) {
             return false;
         }
-    } 
+    }
     // separate out this function to not inline.
     return _TagInt_sub_with_objects(a, b, c);
 }
@@ -489,7 +489,7 @@ static bool TagInt_generalized_row_op_with_objects(
     Py_DECREF(av); Py_DECREF(bw); Py_DECREF(av_bw);
     Py_DECREF(cv); Py_DECREF(dw); Py_DECREF(cv_dw);
     return false;
-    
+
 error:
     Py_XDECREF(v_obj); Py_XDECREF(w_obj);
     Py_XDECREF(av); Py_XDECREF(bw); Py_XDECREF(av_bw);
@@ -887,15 +887,33 @@ unequal:
     }
 }
 
+static Py_ssize_t
+Vector_num_pointers(TagInt *x, Py_ssize_t N)
+{
+    Py_ssize_t result = 0;
+    for (Py_ssize_t i = 0; i < N; i++) {
+        if (TagInt_is_pointer(x[i])) {
+            result++;
+        }
+    }
+    return result;
+}
+
+static bool
+Vector_has_pointers(TagInt *x, Py_ssize_t N)
+{
+    for (Py_ssize_t i = 0; i < N; i++) {
+        if (TagInt_is_pointer(x[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static PyObject *
 Vector__num_bigints(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
-    Py_ssize_t result = 0;
-    TagInt *self_vec = Vector_get_vec(self);
-    for (Py_ssize_t i = 0; i < Py_SIZE(self); i++) {
-        result += TagInt_is_pointer(self_vec[i]);
-    }
-    return PyLong_FromSsize_t(result);
+    return PyLong_FromSsize_t(Vector_num_pointers(Vector_get_vec(self), Py_SIZE(self)));
 }
 
 static PyObject *
@@ -1126,6 +1144,7 @@ static PyTypeObject Vector_Type = {
 static bool
 row_op_impl_with_objects(TagInt *v, TagInt *w, Py_ssize_t n, PyObject *k_obj)
 {
+    // w[0:n] += k * v[0:n]
     for (Py_ssize_t i = 0; i < n; i++) {
         if (TagInt_is_zero(v[i])) {
             continue;
@@ -1140,6 +1159,7 @@ row_op_impl_with_objects(TagInt *v, TagInt *w, Py_ssize_t n, PyObject *k_obj)
 static bool
 row_op_impl_with_intptr(TagInt *v, TagInt *w, Py_ssize_t n, intptr_t k, PyObject **k_obj_cache)
 {
+    // w[0:n] += k * v[0:n]
     if (k == 0) {
         return false;
     } else if (k == 1) {
@@ -1261,7 +1281,7 @@ generalized_row_op(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         PyErr_SetString(PyExc_ValueError, "generalized_row_op vectors must have the same length");
         return NULL;
     }
-    PyObject *abcd[4] = {args[2], args[3], args[4], args[5]}; 
+    PyObject *abcd[4] = {args[2], args[3], args[4], args[5]};
     if (generalized_row_op_impl(Vector_get_vec(v), Vector_get_vec(w), Py_SIZE(v), abcd)) {
         return NULL;
     }
@@ -1280,7 +1300,7 @@ xgcd_using_objects(PyObject *a, PyObject *b, PyObject **result)
     PyObject *q = NULL;
     PyObject *qx1 = NULL, *qy1 = NULL, *qg1 = NULL;
     PyObject *x2 = NULL, *y2 = NULL, *g2 = NULL;
-    
+
     // Start with the two equations
     //  1*a + 0*b = a
     //  0*a + 1*b = b
@@ -1297,7 +1317,7 @@ xgcd_using_objects(PyObject *a, PyObject *b, PyObject **result)
         if (!(qg1 = pylong_multiply(q, g1))) { goto error; }
         if (!(x2 = pylong_subtract(x, qx1))) { goto error; }
         if (!(y2 = pylong_subtract(y, qy1))) { goto error; }
-        if (!(g2 = pylong_subtract(g, qg1))) { goto error; }        
+        if (!(g2 = pylong_subtract(g, qg1))) { goto error; }
         Py_DECREF(q); q = NULL;
         Py_DECREF(qx1); qx1 = NULL;
         Py_DECREF(qy1); qy1 = NULL;
@@ -1369,12 +1389,12 @@ xgcd_using_intptr(intptr_t a, intptr_t b, intptr_t *result)
         assert(b != INTPTR_MIN);
         b = -b;
     }
-    
+
     intptr_t x = 1, y = 0, g = a;
     intptr_t x1 = 0, y1 = 1, g1 = b;
     while (g1) {
         intptr_t q = g / g1;
-        intptr_t x2 = x - q*x1;  
+        intptr_t x2 = x - q*x1;
         intptr_t y2 = y - q*y1;
         intptr_t g2 = g - q*g1;
         x = x1; x1 = x2;
@@ -1452,6 +1472,8 @@ typedef struct {
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
     Py_ssize_t *nonzero_end_in_row; // One past the index of the last nonzero entry.
     int HNF_policy;
+    int HNF_policy_data;
+    bool seen_bigints;
     Py_ssize_t first_HNF_row;
     PyObject *basis[1]; // logical length=rank. Has space for Py_SIZE(self);
 } Lattice;
@@ -1469,6 +1491,8 @@ Lattice_clear(PyObject *self) {
     }
     lat->num_zero_columns = Py_SIZE(self);
     lat->first_HNF_row = 0;
+    lat->HNF_policy_data = 0;
+    lat->seen_bigints = false;
 }
 
 static void
@@ -1687,7 +1711,7 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 static PyObject *
 Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
 {
-    if (N > PY_SSIZE_T_MAX/(4*sizeof(Py_ssize_t))) {
+    if (N > PY_SSIZE_T_MAX/(Py_ssize_t)(4*sizeof(Py_ssize_t))) {
         PyErr_SetString(PyExc_OverflowError, "Lattice(N) argument too big");
         return NULL;
     }
@@ -1717,7 +1741,9 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     L->col_to_pivot = col_to_pivot;
     L->nonzero_end_in_row = nonzero_end_in_row;
     L->HNF_policy = HNF_policy;
+    L->HNF_policy_data = 0;
     L->first_HNF_row = 0;
+    L->seen_bigints = false;
     return (PyObject *)L;
 }
 
@@ -1733,7 +1759,7 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "Lattice(N) argument must be nonnegative");
         return NULL;
     }
-    if (!(0 <= HNF_policy && HNF_policy <= 6)) {
+    if (!(0 <= HNF_policy && HNF_policy <= 10)) {
         PyErr_SetString(PyExc_ValueError, "unknown HNF_policy");
         return NULL;
     }
@@ -1742,6 +1768,8 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
 
 static PyObject *
 Lattice_full(PyTypeObject *type, PyObject *arg) {
+    PyErr_SetString(PyExc_NotImplementedError, "oops");
+    return NULL;
 }
 
 static PyObject *
@@ -1777,9 +1805,41 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     return (PyObject *)copy;
 }
 
+static bool
+Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix);
+
 static int
 Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
 {
+    switch (L->HNF_policy) {
+        case 7:
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 2) {
+                L->HNF_policy_data = 0;
+                if (Lattice_HNFify_impl(L, 0)) {
+                    return -1;
+                }
+            }
+            break;
+        case 8:
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 4) {
+                L->HNF_policy_data = 0;
+                if (Lattice_HNFify_impl(L, 0)) {
+                    return -1;
+                }
+            }
+            break;
+        case 9:
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 8) {
+                L->HNF_policy_data = 0;
+                if (Lattice_HNFify_impl(L, 0)) {
+                    return -1;
+                }
+            }
+            break;
+    }
     Py_ssize_t N = Py_SIZE(L);
     for (Py_ssize_t j = j0; j < N; j++) {
         if (TagInt_is_zero(vec[j])) {
@@ -1968,6 +2028,8 @@ Lattice_insert_vector_with_pivot(Lattice *L, PyObject *v, Py_ssize_t j)
     assert(L->first_HNF_row <= R);
     L->first_HNF_row = Py_MAX(L->first_HNF_row, where) + 1;
     assert(L->first_HNF_row <= L->rank);
+
+    L->seen_bigints = L->seen_bigints || Vector_has_pointers(&vec[j], nze-j);
     return where;
 }
 
@@ -2003,6 +2065,11 @@ modified_row(Lattice *L, Py_ssize_t i)
         assert(L->first_HNF_row <= L->rank);
     }
     fix_nonzero_end_in_row(L, i);
+    if (!L->seen_bigints) {
+        Py_ssize_t j = L->row_to_pivot[i];
+        TagInt *vec = Vector_get_vec(L->basis[i]);
+        L->seen_bigints = Vector_has_pointers(&vec[j], L->nonzero_end_in_row[i] - j);
+    }
 }
 
 static bool
@@ -2156,11 +2223,11 @@ error:
 }
 
 static bool
-Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix);
-
-static bool
 Lattice_apply_HNF_policy(Lattice *L, Py_ssize_t i, Py_ssize_t j)
 {
+    if (L->nonzero_end_in_row[i] - j == 1) {
+        bool err = Lattice_HNFify_impl(L, 0);
+    }
     // printf("applying policy %i\n", L->HNF_policy);
     switch (L->HNF_policy) {
     case 0: // NEVER
@@ -2223,6 +2290,40 @@ Lattice_apply_HNF_policy(Lattice *L, Py_ssize_t i, Py_ssize_t j)
             }
             if (has_bigint) {
                 return Lattice_HNFify_impl(L, i);
+            }
+            return false;
+        }
+    case 7: // EVERY_2_OPERATIONS
+        {
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 2) {
+                L->HNF_policy_data = 0;
+                return Lattice_HNFify_impl(L, 0);
+            }
+            return false;
+        }
+    case 8: // EVERY_4_OPERATIONS
+        {
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 4) {
+                L->HNF_policy_data = 0;
+                return Lattice_HNFify_impl(L, 0);
+            }
+            return false;
+        }
+    case 9: // EVERY_8_OPERATIONS
+        {
+            L->HNF_policy_data++;
+            if (L->HNF_policy_data >= 8) {
+                L->HNF_policy_data = 0;
+                return Lattice_HNFify_impl(L, 0);
+            }
+            return false;
+        }
+    case 10: // ONLY_IF_SEEN_BIGINTS
+        {
+            if (L->seen_bigints) {
+                return Lattice_HNFify_impl(L, 0);
             }
             return false;
         }
@@ -2516,7 +2617,6 @@ Lattice_get_col_to_pivot(PyObject *self, PyObject *Py_UNUSED(ignored))
 static bool
 make_pivots_positive(Lattice *L)
 {
-    Py_ssize_t N = Py_SIZE(L);
     PyObject *zero = PyLong_FromIntptr(0);
     if (zero == NULL) {
         return true;
@@ -2862,7 +2962,7 @@ Lattice_str(PyObject *self) {
     if (!(lbracket = PyUnicode_FromStringAndSize("[", 1))) { goto error; }
     if (!(rbracket = PyUnicode_FromStringAndSize("]", 1))) { goto error; }
     if (!(newline = PyUnicode_FromStringAndSize("\n", 1))) { goto error; }
-    if (!(parts = PyList_New(0))) { goto error; }    
+    if (!(parts = PyList_New(0))) { goto error; }
     for (Py_ssize_t i = 0; i < R; i++) {
         if (i > 0) {
             if (PyList_Append(parts, newline) < 0) {
