@@ -1491,7 +1491,7 @@ typedef struct {
     // by this constant space overhead.
 } Lattice;
 
-static inline TagInt *
+static TagInt *
 Lattice_push_vector(Lattice *L, TagInt *vec)
 {
     // Naively push a vector to the end of the basis.
@@ -1505,11 +1505,11 @@ Lattice_push_vector(Lattice *L, TagInt *vec)
 }
 
 static void
-Lattice_pop_vector(Lattice *L)
+Lattice_pop_vector(Lattice *L, Py_ssize_t j0)
 {
     Py_ssize_t N = L->N;
     TagInt *vec = (TagInt *)(L->buffer_for_tagints + N*L->rank);
-    for (Py_ssize_t j = 0; j < N; j++) {
+    for (Py_ssize_t j = j0; j < N; j++) {
         destroy_TagInt(&vec[j]);
     }
 }
@@ -1843,46 +1843,18 @@ static bool
 Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix);
 
 static int
-Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
+Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
 {
-    switch (L->HNF_policy) {
-        case 7:
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 2) {
-                L->HNF_policy_data = 0;
-                if (Lattice_HNFify_impl(L, 0)) {
-                    return -1;
-                }
-            }
-            break;
-        case 8:
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 4) {
-                L->HNF_policy_data = 0;
-                if (Lattice_HNFify_impl(L, 0)) {
-                    return -1;
-                }
-            }
-            break;
-        case 9:
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 8) {
-                L->HNF_policy_data = 0;
-                if (Lattice_HNFify_impl(L, 0)) {
-                    return -1;
-                }
-            }
-            break;
-    }
+    vec = Lattice_push_vector(L, vec);
     Py_ssize_t N = L->N;
-    for (Py_ssize_t j = j0; j < N; j++) {
+    for (; j < N; j++) {
         if (TagInt_is_zero(vec[j])) {
             continue;
         }
         Py_ssize_t i = L->col_to_pivot[j];
         if (i == -1) {
             // No pivot here to zero out this nonzero vec entry.
-            return 0;
+            goto not_present;
         }
         TagInt *row = L->basis[i];
         Py_ssize_t nze = L->nonzero_end_in_row[i];
@@ -1892,14 +1864,18 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
             assert(rowj != 0);
             assert(vecj != 0);
             if (vecj % rowj != 0) {
-                return 0;
+                goto not_present;
+            }
+            if (nze - i == 1) {
+                destroy_TagInt(&vec[j]);
+                continue;
             }
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
             if (row_op_impl_with_intptr(&row[j], &vec[j], nze-j, neg_q, &neg_q_obj)) {
                 Py_XDECREF(neg_q_obj);
-                return -1;
+                goto error;
             }
             Py_XDECREF(neg_q_obj);
             assert(TagInt_is_zero(vec[j]));
@@ -1908,18 +1884,18 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
 #endif
         PyObject *a_obj = TagInt_to_object(row[j]);
         if (a_obj == NULL) {
-            return -1;
+            goto error;
         }
         PyObject *b_obj = TagInt_to_object(vec[j]);
         if (b_obj == NULL) {
             Py_DECREF(a_obj);
-            return -1;
+            goto error;
         }
         PyObject *rem = pylong_remainder(b_obj, a_obj);
         if (rem == NULL) {
             Py_DECREF(a_obj);
             Py_DECREF(b_obj);
-            return -1;
+            goto error;
         }
         int not_a_multiple = pylong_bool(rem);
         Py_DECREF(rem);
@@ -1927,29 +1903,42 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j0)
             // This pivot can't zero this entry
             Py_DECREF(a_obj);
             Py_DECREF(b_obj);
-            return 0;
+            goto not_present;
+        }
+        if (nze - i == 1) {
+            destroy_TagInt(&vec[j]);
+            Py_DECREF(a_obj);
+            Py_DECREF(b_obj);
+            continue;
         }
         PyObject *q = pylong_floor_divide(b_obj, a_obj);
         Py_DECREF(a_obj);
         Py_DECREF(b_obj);
         if (q == NULL) {
-            return -1;
+            goto error;
         }
         PyObject *neg_q = pylong_negative(q);
         Py_DECREF(q);
         if (neg_q == NULL) {
-            return -1;
+            goto error;
         }
         // This is doing "vec -= q * row"
         if (row_op_impl_with_objects(&row[j], &vec[j], nze-j, neg_q)) {
             Py_DECREF(neg_q);
-            return -1;
+            goto error;
         }
         Py_DECREF(neg_q);
         assert(TagInt_is_zero(vec[j]));
     }
     // Everything became zero, so the vector is present.
+    // No need to manage those references either.
     return 1;
+error:
+    Lattice_pop_vector(L, j);
+    return -1;
+not_present:
+    Lattice_pop_vector(L, j);
+    return 0;
 }
 
 static int
@@ -1984,10 +1973,7 @@ Lattice_contains_impl(Lattice *L, TagInt *vec, Py_ssize_t j0)
         return 1;
     }
     // Make a copy so we can mutate as needed
-    vec = Lattice_push_vector(L, vec);
-    int result = Lattice_contains_loop(L, vec, j);
-    Lattice_pop_vector(L);
-    return result;
+    return Lattice_contains_loop(L, vec, j);
 }
 
 static int
@@ -2251,7 +2237,9 @@ static bool
 Lattice_apply_HNF_policy(Lattice *L, Py_ssize_t i, Py_ssize_t j)
 {
     if (L->nonzero_end_in_row[i] - j == 1) {
-        bool err = Lattice_HNFify_impl(L, 0);
+        if (Lattice_HNFify_impl(L, 0)) {
+            return false;
+        }
     }
     // printf("applying policy %i\n", L->HNF_policy);
     switch (L->HNF_policy) {
@@ -2370,7 +2358,7 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
         Py_ssize_t i = L->col_to_pivot[j];
         if (i != -1) {
             if (make_entry_zero(vec, L, i, j)) {
-                Lattice_pop_vector(L);
+                Lattice_pop_vector(L, j);
                 L->errored = true;
                 return true;
             }
