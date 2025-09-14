@@ -390,6 +390,47 @@ class TestLattice(unittest.TestCase):
                         "[0 0 2 2]")
 
     def test_hnf(self):
+        L = Lattice(2)
+        L.add_vector(Vector([1, 3]))
+        L.add_vector(Vector([0, 2]))
+        L.HNFify()
+        self.assertEqual(
+            [vec.tolist() for vec in L.get_basis()],
+            [[1, 1],
+             [0, 2]]
+        )
+
+        L = Lattice(2)
+        L.add_vector(Vector([5, -10]))
+        L.add_vector(Vector([0, -1]))
+        L.HNFify()
+        self.assertEqual(
+            [vec.tolist() for vec in L.get_basis()],
+            [[5, 0],
+             [0, 1]]
+        )
+
+        L = Lattice(2)
+        L.add_vector(Vector([1, 3]))
+        L.add_vector(Vector([0, 1]))
+        L.HNFify()
+        self.assertEqual(
+            [vec.tolist() for vec in L.get_basis()],
+            [[1, 0],
+             [0, 1]]
+        )
+
+        L = Lattice(2, HNF_policy=1)
+        L.add_vector(Vector([3, 1]))
+        L.add_vector(Vector([-2, 0]))
+        L.add_vector(Vector([-3, -1]))
+        L.add_vector(Vector([-2, -1]))
+        self.assertEqual(
+            [vec.tolist() for vec in L.get_basis()],
+            [[1, 0],
+             [0, 1]]
+        )
+
         # From https://en.wikipedia.org/wiki/Hermite_normal_form
         L = Lattice(4)
         L.add_vector(Vector([2, 3, 6, 2]))
@@ -547,6 +588,22 @@ class TestLattice(unittest.TestCase):
              [0, 1, 2, 20],
              [0, 0, 9, 69],
              [0, 0, 0, 77]]
+        )
+
+        # From Pernet and Stein (2009)
+        # "Fast computation of Hermite normal forms of random integer matrices"
+        L = Lattice(6)
+        L.add_vector(Vector([-5,  8, -3, -9,  5,  5]))
+        L.add_vector(Vector([-2,  8, -2, -2,  8,  5]))
+        L.add_vector(Vector([ 7, -5, -8,  4,  3, -4]))
+        L.add_vector(Vector([ 1, -1,  6,  0,  8, -3]))
+        L.HNFify()
+        self.assertEqual(
+            [vec.tolist() for vec in L.get_basis()],
+            [[1, 0, 3, 237, -299,  90],
+             [0, 1, 1, 103, -130,  40],
+             [0, 0, 4, 352, -450, 135],
+             [0, 0, 0, 486, -627, 188]]
         )
 
     def test_hnf_random(self):

@@ -1474,7 +1474,6 @@ typedef struct {
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
     Py_ssize_t *nonzero_end_in_row; // One past the index of the last nonzero entry.
     int HNF_policy;
-    int HNF_policy_data;
     bool seen_bigints;
     bool errored;
     Py_ssize_t first_HNF_row;
@@ -1530,7 +1529,6 @@ Lattice_clear(PyObject *self) {
     }
     L->num_zero_columns = N;
     L->first_HNF_row = 0;
-    L->HNF_policy_data = 0;
     L->seen_bigints = false;
 }
 
@@ -1773,7 +1771,6 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     L->col_to_pivot = col_to_pivot;
     L->nonzero_end_in_row = nonzero_end_in_row;
     L->HNF_policy = HNF_policy;
-    L->HNF_policy_data = 0;
     L->seen_bigints = false;
     L->errored = false;
     L->first_HNF_row = 0;
@@ -1793,7 +1790,7 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "Lattice(N) argument must be nonnegative");
         return NULL;
     }
-    if (!(0 <= HNF_policy && HNF_policy <= 10)) {
+    if (HNF_policy != 0 && HNF_policy != 1) {
         PyErr_SetString(PyExc_ValueError, "unknown HNF_policy");
         return NULL;
     }
@@ -2234,112 +2231,13 @@ error:
 }
 
 static bool
-Lattice_apply_HNF_policy(Lattice *L, Py_ssize_t i, Py_ssize_t j)
+Lattice_apply_HNF_policy(Lattice *L)
 {
-    if (L->nonzero_end_in_row[i] - j == 1) {
-        if (Lattice_HNFify_impl(L, 0)) {
-            return false;
-        }
-    }
-    // printf("applying policy %i\n", L->HNF_policy);
     switch (L->HNF_policy) {
     case 0: // NEVER
         return false;
     case 1: // ALWAYS
         return Lattice_HNFify_impl(L, 0);
-    case 2: // STARTING_AT_INSERTED
-        return Lattice_HNFify_impl(L, i);
-    case 3: // SMART_STARTING_AT_INSERTED
-        {
-            Py_ssize_t tail = L->N - j - 1;
-            Py_ssize_t num_pivots_for_tail = L->rank - i - 1;
-            if (num_pivots_for_tail > tail/2) {
-                return Lattice_HNFify_impl(L, i);
-            }
-            return false;
-        }
-    case 4: // SMARTER_STARTING_AT_INSERTED
-        {
-            TagInt *vec = L->basis[i];
-            Py_ssize_t tail = 0;
-            Py_ssize_t num_pivots_for_tail = 0;
-            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
-                if (!TagInt_is_zero(vec[jj])) {
-                    tail++;
-                    if (L->row_to_pivot[jj] < -1) {
-                        num_pivots_for_tail++;
-                    }
-                }
-            }
-            if (num_pivots_for_tail > tail/2) {
-                return Lattice_HNFify_impl(L, i);
-            }
-            return false;
-        }
-    case 5: // IF_INSERTED_HAS_BIGINT
-        {
-            bool has_bigint = false;
-            TagInt *vec = L->basis[i];
-            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
-                if (TagInt_is_pointer(vec[jj])) {
-                    has_bigint = true;
-                    break;
-                }
-            }
-            if (has_bigint) {
-                return Lattice_HNFify_impl(L, 0);
-            }
-            return false;
-        }
-    case 6: // STARTING_AT_SELECTED_IF_INSERTED_HAS_BIGINT
-        {
-            bool has_bigint = false;
-            TagInt *vec = L->basis[i];
-            for (Py_ssize_t jj = j + 1; jj < L->nonzero_end_in_row[i]; jj++) {
-                if (TagInt_is_pointer(vec[jj])) {
-                    has_bigint = true;
-                    break;
-                }
-            }
-            if (has_bigint) {
-                return Lattice_HNFify_impl(L, i);
-            }
-            return false;
-        }
-    case 7: // EVERY_2_OPERATIONS
-        {
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 2) {
-                L->HNF_policy_data = 0;
-                return Lattice_HNFify_impl(L, 0);
-            }
-            return false;
-        }
-    case 8: // EVERY_4_OPERATIONS
-        {
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 4) {
-                L->HNF_policy_data = 0;
-                return Lattice_HNFify_impl(L, 0);
-            }
-            return false;
-        }
-    case 9: // EVERY_8_OPERATIONS
-        {
-            L->HNF_policy_data++;
-            if (L->HNF_policy_data >= 8) {
-                L->HNF_policy_data = 0;
-                return Lattice_HNFify_impl(L, 0);
-            }
-            return false;
-        }
-    case 10: // ONLY_IF_SEEN_BIGINTS
-        {
-            if (L->seen_bigints) {
-                return Lattice_HNFify_impl(L, 0);
-            }
-            return false;
-        }
     default:
         Py_UNREACHABLE();
     }
@@ -2365,11 +2263,11 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
             continue;
         }
         i = Lattice_insert_vector_with_pivot(L, vec, j);
-        return Lattice_apply_HNF_policy(L, i, j);
+        return Lattice_apply_HNF_policy(L);
     }
     // The whole vector has been zero-ed out.
     // Nothing to add, nor even to garbage collect.
-    return false;
+    return Lattice_apply_HNF_policy(L);
 }
 
 static PyObject *
@@ -3035,6 +2933,7 @@ static PyMethodDef Lattice_methods[] = {
 static PyMemberDef Lattice_members[] = {
     {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY},
     {"ambient_dimension", Py_T_PYSSIZET, offsetof(PyVarObject, ob_size), Py_READONLY},
+    {"first_HNF_row", Py_T_PYSSIZET, offsetof(Lattice, first_HNF_row), Py_READONLY},
     {NULL}
 };
 
