@@ -225,6 +225,10 @@ static inline bool TagInt_is_one(TagInt t) {
     return (t.bits == 2);
 }
 
+static inline bool TagInt_is_negative_one(TagInt t) {
+    return (t.bits == -2);
+}
+
 // steals the obj reference to put in *t
 static bool
 object_to_TagInt_steal(PyObject *obj, TagInt *t) {
@@ -1455,15 +1459,16 @@ static PyTypeObject Lattice_Type;
 
 typedef struct {
     PyObject_VAR_HEAD
-    Py_ssize_t N; // The ambient dimension; we're a sublattice of ZZ^N
+    Py_ssize_t N; // The ambient dimension; we're a sublattice of Z^N
     Py_ssize_t rank; // The number of basis vectors
     Py_ssize_t maxrank; // How many vectors we have space for
     Py_ssize_t num_zero_columns;
     Py_ssize_t *zero_columns;
     Py_ssize_t *col_to_pivot; // length=N. -1 if no pivot
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
-    int HNF_policy;
-    bool errored;
+    int HNF_policy; // 0 --> manual, 1 --> after every addition.
+    bool errored; // set to true after an error occurs to avoid inconsistencies.
+    bool is_full; // set to true once we have all of Z^N
     Py_ssize_t first_HNF_row;
     TagInt *buffer_for_tagints; // Space for (N+1)*N TagInts
     TagInt *basis[1]; // space for N Pointer-to-TagInts
@@ -1471,8 +1476,8 @@ typedef struct {
     // Format:
     //    * The struct members leading up to L.basis
     //    *  (so we can shuffle rows around)
-    //    * then space for 4*N*Py_ssize_t arrays above
-    //    * then space for (N+1)*N TagInts, pointed to by the above.
+    //    * then space for 3*N*Py_ssize_t arrays above
+    //    * then space for (maxrank+1)*N TagInts, pointed to by the above.
     // Technically we don't need to store all of the pointers above
     // and could recalculate, but I don't think we'll be starved
     // by this constant space overhead.
@@ -1744,6 +1749,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
     L->col_to_pivot = col_to_pivot;
     L->HNF_policy = HNF_policy;
     L->errored = false;
+    L->is_full = (N == 0);
     L->first_HNF_row = 0;
     L->buffer_for_tagints = buffer_for_tagints;
     return (PyObject *)L;
@@ -1810,6 +1816,7 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
         L_copy->zero_columns[k] = L->zero_columns[k];
     }
     L_copy->first_HNF_row = L->first_HNF_row;
+    L_copy->is_full = L->is_full;
     return (PyObject *)L_copy;
 }
 
@@ -1917,6 +1924,9 @@ not_present:
 static int
 Lattice_contains_impl(Lattice *L, TagInt *vec, Py_ssize_t j0)
 {
+    if (L->is_full) {
+        return 1;
+    }
     Py_ssize_t N = L->N;
     {
         Py_ssize_t nzc = L->num_zero_columns;
@@ -2189,9 +2199,34 @@ Lattice_apply_HNF_policy(Lattice *L)
     }
 }
 
+static PyObject *
+Lattice_is_full(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return PyBool_FromLong(((Lattice *)self)->is_full);
+}
+
+static inline void
+update_is_full(Lattice *L)
+{
+    Py_ssize_t N = L->N;
+    if (L->rank == N) {
+        for (Py_ssize_t i = 0; i < N; i++) {
+            assert(L->row_to_pivot[i] == i);
+            TagInt p = L->basis[i][i];
+            if (!TagInt_is_one(p) && !TagInt_is_negative_one(p)) {
+                return;
+            }
+        }
+        L->is_full = true;
+    }
+}
+
 static bool
 Lattice_add_vector_impl(Lattice *L, TagInt *vec)
 {
+    if (L->is_full) {
+        return false;
+    }
     // Copy without an allocation!
     vec = Lattice_push_vector(L, vec);
     Py_ssize_t N = L->N;
@@ -2214,10 +2249,12 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
             return true;
         }
         i = Lattice_insert_vector_with_pivot(L, vec, j);
-        return Lattice_apply_HNF_policy(L);
+        break;
     }
-    // The whole vector has been zero-ed out.
-    // Nothing to add, nor even to garbage collect.
+    // If break occurred, the new vector was added successfully.
+    // If no break, the whole vector has been zero-ed out;
+    // nothing to add, nor even to garbage collect.
+    update_is_full(L);
     return Lattice_apply_HNF_policy(L);
 }
 
@@ -2881,6 +2918,8 @@ static PyMethodDef Lattice_methods[] = {
      "L.invariants() returns a the list of integer invariants, ordered by divisibility, potentially including both 0s and 1s."},
     {"_unnormalized_invariants", Lattice_unnormalized_invariants, METH_NOARGS,
      "The same as L.invariants(), but exclude zeros and don't guarantee any divisibility."},
+    {"is_full", Lattice_is_full, METH_NOARGS,
+     "Returns True iff the lattice is the entirety of Z^N"},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

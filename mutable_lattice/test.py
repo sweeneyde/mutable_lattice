@@ -799,6 +799,17 @@ class TestLatticeAPI(unittest.TestCase):
                         with self.assertRaises(RuntimeError):
                             L.add_vector(vec)
 
+    def test_is_full(self):
+        for HNF_policy in [0, 1]:
+            for N in range(5):
+                basis = [Vector([0]*i + [1] + [2]*(N-1-i)) for i in range(N)]
+                L = Lattice(N, HNF_policy=HNF_policy)
+                for vec in basis[:-1]:
+                    L.add_vector(vec)
+                    self.assertIs(L.is_full(), False)
+                for vec in basis[-1:]:
+                    L.add_vector(vec)
+                self.assertIs(L.is_full(), True)
 
 if __name__ == "__main__":
     unittest.main(exit=False)
