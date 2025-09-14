@@ -2608,7 +2608,7 @@ Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyObject *
-Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored))
+Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     // Just find the entries of the diagonal
     // This function doesn't ensure they have all the right divisibility.
@@ -2708,18 +2708,22 @@ error:
 }
 
 static PyObject *
-Lattice_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored))
+Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *mathmodule = NULL;
     PyObject *result = NULL;
     PyObject *gcdfunc = NULL;
+    PyObject *zero = NULL;
     if (!(mathmodule = PyImport_ImportModule("math"))) {
         goto error;
     }
     if (!(gcdfunc = PyObject_GetAttrString(mathmodule, "gcd"))) {
         goto error;
     }
-    if (!(result = Lattice_unnormalized_smith_diagonal(self, NULL))) {
+    if (!(result = Lattice_unnormalized_invariants(self, NULL))) {
+        goto error;
+    }
+    if (!(zero = PyLong_FromLong(0))) {
         goto error;
     }
     if (PyList_Sort(result) < 0) {
@@ -2759,13 +2763,21 @@ Lattice_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored))
             break;
         }
     }
+    Py_ssize_t N = ((Lattice *)self)->N;
+    while (PyList_GET_SIZE(result) < N) {
+        if (PyList_Append(result, zero) < 0) {
+            goto error;
+        }
+    }
     Py_DECREF(mathmodule);
     Py_DECREF(gcdfunc);
+    Py_DECREF(zero);
     return result;
 error:
     Py_XDECREF(mathmodule);
     Py_XDECREF(gcdfunc);
     Py_XDECREF(result);
+    Py_XDECREF(zero);
     return NULL;
 }
 
@@ -2860,15 +2872,15 @@ static PyMethodDef Lattice_methods[] = {
     {"_get_row_to_pivot", Lattice_get_row_to_pivot, METH_NOARGS,
      "L._get_row_to_pivot() returns a list mapping i-->j"},
     {"_get_col_to_pivot", Lattice_get_col_to_pivot, METH_NOARGS,
-     "L._get_col_to_picot() returns a list mapping j-->(i or None)"},
+     "L._get_col_to_pivot() returns a list mapping j-->(i or None)"},
     {"_assert_consistent", Lattice__assert_consistent, METH_NOARGS,
-     "assert the invariants of the Lattice data structure"},
+     "assert the invariants of the Lattice data structure for C debugging"},
     {"HNFify", Lattice_HNFify, METH_NOARGS,
      "Apply row operations to convert the stored basis to Hermite normal form (HNF)"},
-    {"smith_diagonal", Lattice_smith_diagonal, METH_NOARGS,
-     "Return the nonzero diagonal entries of the Smith Normal Form of this basis"},
-    {"unnormalized_smith_diagonal", Lattice_unnormalized_smith_diagonal, METH_NOARGS,
-     "Like smith_diagonal(), but don't enforce divisibility in the result"},
+    {"invariants", Lattice_invariants, METH_NOARGS,
+     "L.invariants() returns a the list of integer invariants, ordered by divisibility, potentially including both 0s and 1s."},
+    {"_unnormalized_invariants", Lattice_unnormalized_invariants, METH_NOARGS,
+     "The same as L.invariants(), but exclude zeros and don't guarantee any divisibility."},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

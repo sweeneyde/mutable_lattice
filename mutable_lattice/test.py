@@ -639,7 +639,7 @@ class LatticeTests:
                         for ii in range(i):
                             self.assertIn(basis[ii][j], range(pivot))
 
-    def test_smith_diagonal(self):
+    def test_invariants(self):
         # From Arne Storjohann (1998).
         # "Computing Hermite and Smith normal forms of triangular integer matrices"
         L = Lattice(5, HNF_policy=self.HNF_POLICY)
@@ -648,34 +648,34 @@ class LatticeTests:
         L.add_vector(Vector([0,      0,     2, 99206, 94692]))
         L.add_vector(Vector([0,      0,     0,  9456,  7080]))
         L.HNFify()
-        self.assertEqual(L.smith_diagonal(), [1, 2, 6, 24])
+        self.assertEqual(L.invariants(), [1, 2, 6, 24, 0])
 
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 0, 1]))
         L.add_vector(Vector([0, 1, 0]))
-        self.assertEqual(L.smith_diagonal(), [1, 1])
+        self.assertEqual(L.invariants(), [1, 1, 0])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 1, 2]))
         L.add_vector(Vector([3, 4, 5]))
         L.add_vector(Vector([6, 7, 8]))
-        self.assertEqual(L.smith_diagonal(), [1, 3])
+        self.assertEqual(L.invariants(), [1, 3, 0])
 
         L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3,4,5,6]))
         L.add_vector(Vector([7,3,8,10]))
         L.add_vector(Vector([14,5,6,7]))
         L.add_vector(Vector([2,2,10,9]))
-        self.assertEqual(L.smith_diagonal(), [1, 1, 1, 687])
+        self.assertEqual(L.invariants(), [1, 1, 1, 687])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1,5,7]))
         L.add_vector(Vector([3,6,9]))
         L.add_vector(Vector([0,1,2]))
-        self.assertEqual(L.smith_diagonal(), [1, 1, 6])
+        self.assertEqual(L.invariants(), [1, 1, 6])
 
-    def test_smith_diagonal_random(self):
+    def test_invariants_random(self):
         VALUES = list(self.VALUES)
         random.shuffle(VALUES)
         for a, b in zip(VALUES, VALUES[1:]):
@@ -699,11 +699,11 @@ class LatticeTests:
                 B += k2 * A
 
             if a == 0 and b == 0:
-                expected = []
+                expected = [0, 0]
             elif a == 0:
-                expected = [abs(b)]
+                expected = [abs(b), 0]
             elif b == 0:
-                expected = [abs(a)]
+                expected = [abs(a), 0]
             else:
                 g = math.gcd(a, b)
                 lcm = abs(a * b) // g
@@ -712,7 +712,7 @@ class LatticeTests:
             L = Lattice(2, HNF_policy=self.HNF_POLICY)
             L.add_vector(A)
             L.add_vector(B)
-            self.assertEqual(L.smith_diagonal(), expected)
+            self.assertEqual(L.invariants(), expected)
 
 
 class TestLatticeHNFPolicy0(LatticeTests, unittest.TestCase):
