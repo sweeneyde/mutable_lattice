@@ -1472,7 +1472,6 @@ typedef struct {
     Py_ssize_t *zero_columns;
     Py_ssize_t *col_to_pivot; // length=N. -1 if no pivot
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
-    Py_ssize_t *nonzero_end_in_row; // One past the index of the last nonzero entry.
     int HNF_policy;
     bool seen_bigints;
     bool errored;
@@ -1606,21 +1605,6 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
             PyErr_SetString(PyExc_AssertionError, "row_to_pivot too small");
             return NULL;
         }
-        Py_ssize_t nze = L->nonzero_end_in_row[i];
-        if (!(j < nze)) {
-            PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row inconsistent");
-            return NULL;
-        }
-        for (Py_ssize_t j = nze; j < N; j++) {
-            if (!TagInt_is_zero(basis[i][j])) {
-                PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row too small");
-                return NULL;
-            }
-        }
-        if (TagInt_is_zero(basis[i][nze-1])) {
-            PyErr_SetString(PyExc_AssertionError, "last_nonzero_in_row too large");
-            return NULL;
-        }
     }
     Py_ssize_t *col_to_pivot = L->col_to_pivot;
     Py_ssize_t prev_i = -1;
@@ -1742,7 +1726,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     // + N words for the basis
     // + N*(N+1) words for the buffers
     // == N*(N+6)
-    if (N && N > PY_SSIZE_T_MAX/N - 6) {
+    if (N && N > PY_SSIZE_T_MAX/N - 5) {
         PyErr_SetString(PyExc_OverflowError, "Lattice was too big to construct");
         return NULL;
     }
@@ -1755,8 +1739,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     Py_ssize_t *zero_columns = (Py_ssize_t *)&buffer[N];
     Py_ssize_t *col_to_pivot = (Py_ssize_t *)&buffer[2*N];
     Py_ssize_t *row_to_pivot = (Py_ssize_t *)&buffer[3*N];
-    Py_ssize_t *nonzero_end_in_row = (Py_ssize_t *)&buffer[4*N];
-    TagInt *buffer_for_tagints = (TagInt *)&buffer[5*N];
+    TagInt *buffer_for_tagints = (TagInt *)&buffer[4*N];
     assert(TagInt_is_zero(buffer_for_tagints[N*(N+1)-1]));
 
     L->N = N;
@@ -1769,7 +1752,6 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     }
     L->row_to_pivot = row_to_pivot;
     L->col_to_pivot = col_to_pivot;
-    L->nonzero_end_in_row = nonzero_end_in_row;
     L->HNF_policy = HNF_policy;
     L->seen_bigints = false;
     L->errored = false;
@@ -1820,7 +1802,6 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     for (Py_ssize_t i = 0; i < R; i++) {
         L_copy->basis[i] = Lattice_push_vector(L_copy, L->basis[i]);
         L_copy->row_to_pivot[i] = L->row_to_pivot[i];
-        L_copy->nonzero_end_in_row[i] = L->nonzero_end_in_row[i];
         L_copy->rank++;
     }
     for (Py_ssize_t j = 0; j < N; j++) {
@@ -1854,7 +1835,6 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             goto not_present;
         }
         TagInt *row = L->basis[i];
-        Py_ssize_t nze = L->nonzero_end_in_row[i];
 #if USE_FAST_PATHS
         if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
             intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
@@ -1863,14 +1843,14 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             if (vecj % rowj != 0) {
                 goto not_present;
             }
-            if (nze - i == 1) {
+            if (N - i == 1) {
                 destroy_TagInt(&vec[j]);
                 continue;
             }
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
-            if (row_op_impl_with_intptr(&row[j], &vec[j], nze-j, neg_q, &neg_q_obj)) {
+            if (row_op_impl_with_intptr(&row[j], &vec[j], N-j, neg_q, &neg_q_obj)) {
                 Py_XDECREF(neg_q_obj);
                 goto error;
             }
@@ -1902,7 +1882,7 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             Py_DECREF(b_obj);
             goto not_present;
         }
-        if (nze - i == 1) {
+        if (N - i == 1) {
             destroy_TagInt(&vec[j]);
             Py_DECREF(a_obj);
             Py_DECREF(b_obj);
@@ -1920,7 +1900,7 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             goto error;
         }
         // This is doing "vec -= q * row"
-        if (row_op_impl_with_objects(&row[j], &vec[j], nze-j, neg_q)) {
+        if (row_op_impl_with_objects(&row[j], &vec[j], N-j, neg_q)) {
             Py_DECREF(neg_q);
             goto error;
         }
@@ -1997,7 +1977,6 @@ Lattice_insert_vector_with_pivot(Lattice *L, TagInt *vec, Py_ssize_t j)
     TagInt **basis = L->basis;
     Py_ssize_t *row_to_pivot = L->row_to_pivot;
     Py_ssize_t *col_to_pivot = L->col_to_pivot;
-    Py_ssize_t *nonzero_end_in_row = L->nonzero_end_in_row;
     Py_ssize_t where = bisect_left(row_to_pivot, 0, R, j);
     assert(0 <= where && where <= R);
     assert(where == 0 || row_to_pivot[where-1] < j);
@@ -2005,24 +1984,16 @@ Lattice_insert_vector_with_pivot(Lattice *L, TagInt *vec, Py_ssize_t j)
     L->rank = R + 1;
     assert(L->rank <= L->N);
 
-    Py_ssize_t nze = L->N;
-    while (nze > j && TagInt_is_zero(vec[nze-1])) {
-        nze--;
-    }
-    assert(nze > j);
-
     // shift all the later rows down
     for (Py_ssize_t i = R; i > where; i--) {
         basis[i] = basis[i - 1];
         row_to_pivot[i] = row_to_pivot[i - 1];
-        nonzero_end_in_row[i] = nonzero_end_in_row[i - 1];
         assert(col_to_pivot[row_to_pivot[i]] == i - 1);
         col_to_pivot[row_to_pivot[i]] = i;
     }
     basis[where] = vec;
     row_to_pivot[where] = j;
     col_to_pivot[j] = where;
-    nonzero_end_in_row[where] = nze;
 
     Py_ssize_t *zero_columns = L->zero_columns;
     Py_ssize_t nzc = L->num_zero_columns;
@@ -2038,7 +2009,7 @@ Lattice_insert_vector_with_pivot(Lattice *L, TagInt *vec, Py_ssize_t j)
     L->first_HNF_row = Py_MAX(L->first_HNF_row, where) + 1;
     assert(L->first_HNF_row <= L->rank);
 
-    L->seen_bigints = L->seen_bigints || Vector_has_pointers(&vec[j], nze-j);
+    L->seen_bigints = L->seen_bigints || Vector_has_pointers(&vec[j], L->N-j);
     return where;
 }
 
@@ -2053,19 +2024,6 @@ do_swap(TagInt *va, TagInt *vb, Py_ssize_t N)
 }
 
 static void
-fix_nonzero_end_in_row(Lattice *L, Py_ssize_t i)
-{
-    // Update nonzero_end_in_row
-    TagInt *row = L->basis[i];
-    Py_ssize_t nze = L->N;
-    while (nze > 0 && TagInt_is_zero(row[nze-1])) {
-        nze--;
-    }
-    assert(nze > 0);
-    L->nonzero_end_in_row[i] = nze;
-}
-
-static void
 modified_row(Lattice *L, Py_ssize_t i)
 {
     // Update first_HNF_row
@@ -2073,11 +2031,10 @@ modified_row(Lattice *L, Py_ssize_t i)
         L->first_HNF_row = i + 1;
         assert(L->first_HNF_row <= L->rank);
     }
-    fix_nonzero_end_in_row(L, i);
     if (!L->seen_bigints) {
         Py_ssize_t j = L->row_to_pivot[i];
         TagInt *vec = L->basis[i];
-        L->seen_bigints = Vector_has_pointers(&vec[j], L->nonzero_end_in_row[i] - j);
+        L->seen_bigints = Vector_has_pointers(&vec[j], L->N - j);
     }
 }
 
@@ -2087,7 +2044,6 @@ make_entry_zero(TagInt *vec, Lattice *L, Py_ssize_t i, Py_ssize_t j)
     // helper function for L.add_vector(v)
     Py_ssize_t N = L->N;
     TagInt *row = L->basis[i];
-    Py_ssize_t nze = L->nonzero_end_in_row[i];
 #if USE_FAST_PATHS
     if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
         intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
@@ -2097,7 +2053,7 @@ make_entry_zero(TagInt *vec, Lattice *L, Py_ssize_t i, Py_ssize_t j)
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
-            if (row_op_impl_with_intptr(&row[j], &vec[j], nze - j, neg_q, &neg_q_obj)) {
+            if (row_op_impl_with_intptr(&row[j], &vec[j], N - j, neg_q, &neg_q_obj)) {
                 Py_XDECREF(neg_q_obj);
                 return true;
             }
@@ -2167,7 +2123,7 @@ make_entry_zero(TagInt *vec, Lattice *L, Py_ssize_t i, Py_ssize_t j)
         if (neg_q == NULL) {
             return true;
         }
-        bool err = row_op_impl_with_objects(&row[j], &vec[j], nze - j, neg_q);
+        bool err = row_op_impl_with_objects(&row[j], &vec[j], N - j, neg_q);
         Py_DECREF(neg_q);
         return err;
     }
@@ -2540,7 +2496,7 @@ make_pivots_positive(Lattice *L)
             goto error;
         }
         if (neg) {
-            Py_ssize_t end_j = L->nonzero_end_in_row[i];
+            Py_ssize_t end_j = L->N;
             if (Vector_negate_impl(&row[j], end_j - j)) {
                 goto error;
             }
@@ -2575,18 +2531,18 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
     // basis[R-2] : 0 0 0 0 0 0 0 ... 0 0 p (HNF)   <-----using these two pivot rows
     // basis[R-1] : 0 0 0 0 0 0 0 ... 0 0 0 0 0 p   <--/
 
+    Py_ssize_t N = L->N;
     for (Py_ssize_t i = L->first_HNF_row - 1; i >= first_row_to_fix; i--) {
         TagInt *row_to_reduce = L->basis[i];
         for (Py_ssize_t ii = i + 1; ii < R; ii++) {
             TagInt *pivot_row = L->basis[ii];
             Py_ssize_t jj = L->row_to_pivot[ii];
-            Py_ssize_t jj_end = L->nonzero_end_in_row[ii];
             TagInt pivot = pivot_row[jj];
             TagInt above = row_to_reduce[jj];
             if (TagInt_is_zero(above)) {
                 continue;
             }
-            if (TagInt_is_one(pivot) && jj_end - jj == 1) {
+            if (TagInt_is_one(pivot) && N - jj == 1) {
                 destroy_TagInt(&row_to_reduce[jj]);
                 continue;
             }
@@ -2600,7 +2556,7 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
                 }
                 intptr_t neg_q = -q;
                 PyObject *neg_q_obj = NULL;
-                if (row_op_impl_with_intptr(&pivot_row[jj], &row_to_reduce[jj], jj_end-jj, neg_q, &neg_q_obj)) {
+                if (row_op_impl_with_intptr(&pivot_row[jj], &row_to_reduce[jj], N-jj, neg_q, &neg_q_obj)) {
                     Py_XDECREF(neg_q_obj);
                     goto error;
                 }
@@ -2635,13 +2591,12 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
             if (neg_q_obj == NULL) {
                 goto error;
             }
-            if (row_op_impl_with_objects(&pivot_row[jj], &row_to_reduce[jj], jj_end-jj, neg_q_obj)) {
+            if (row_op_impl_with_objects(&pivot_row[jj], &row_to_reduce[jj], N-jj, neg_q_obj)) {
                 Py_DECREF(neg_q_obj);
                 goto error;
             }
             Py_DECREF(neg_q_obj);
         }
-        fix_nonzero_end_in_row(L, i);
     }
     assert(first_row_to_fix <= L->rank);
     L->first_HNF_row = first_row_to_fix;
