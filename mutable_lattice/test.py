@@ -280,8 +280,13 @@ class TestRowOps(unittest.TestCase):
         with self.assertRaises(IndexError):
             v.shuffled_by_array(a)
 
-class TestLattice(unittest.TestCase):
+class LatticeTests:
+
+    # define in subclasses
+    HNF_POLICY = None
+
     def setUp(self):
+        assert self.HNF_POLICY is not None
         self.VALUES = make_some_values()
 
     def tearDown(self):
@@ -292,7 +297,7 @@ class TestLattice(unittest.TestCase):
         VALUES = self.VALUES
         for N in [0, 1, 2, 3, 4, 5, 10, 20]:
             for _ in range(20):
-                mod = Lattice(N)
+                mod = Lattice(N, HNF_policy=self.HNF_POLICY)
                 # mod._assert_consistent()
                 vecs = [
                     Vector(random.choices(VALUES, k=N))
@@ -309,9 +314,14 @@ class TestLattice(unittest.TestCase):
                     self.assertIn(vec0 + vec, mod, msg=vecs)
                     self.assertIn(3*vec0-100*vec, mod, msg=vecs)
 
+                lin_combo = zero.copy()
+                for vec in vecs:
+                    lin_combo += random.choice(VALUES)*vec
+                self.assertIn(lin_combo, mod)
+
                 basis = mod.get_basis()
                 for to_remove in basis:
-                    submod = Lattice(N)
+                    submod = Lattice(N, HNF_policy=self.HNF_POLICY)
                     for vec in basis:
                         if vec != to_remove:
                             submod.add_vector(vec)
@@ -331,7 +341,7 @@ class TestLattice(unittest.TestCase):
                     list(random.choices(VALUES, k=N))
                     for _ in range(random.randrange(N + 2))
                 ]
-                L = Lattice(N)
+                L = Lattice(N, HNF_policy=self.HNF_POLICY)
                 PyL = PyLattice(N)
                 for vec in vecs:
                     vvec = Vector(vec)
@@ -360,37 +370,33 @@ class TestLattice(unittest.TestCase):
                     Vector(random.choices(VALUES, k=N))
                     for _ in range(random.randrange(N + 2))
                 ]
-                mod = Lattice(N)
+                mod = Lattice(N, HNF_policy=self.HNF_POLICY)
                 for vec in vecs:
                     mod.add_vector(vec)
                 for i in range(len(vecs) + 1):
                     vecs1, vecs2 = vecs[:i], vecs[i:]
                     random.shuffle(vecs1)
                     random.shuffle(vecs2)
-                    mod1 = Lattice(N)
+                    mod1 = Lattice(N, HNF_policy=self.HNF_POLICY)
                     for vec in vecs1:
                         mod1.add_vector(vec)
-                    mod2 = Lattice(N)
+                    mod2 = Lattice(N, HNF_policy=self.HNF_POLICY)
                     for vec in vecs2:
                         mod2.add_vector(vec)
                     mod3 = mod1 + mod2
                     self.assertEqual(mod3, mod)
 
     def test_str(self):
-        L = Lattice(4)
+        L = Lattice(4, HNF_policy=self.HNF_POLICY)
         self.assertEqual(str(L), "<zero lattice in Z^4>")
+        L.add_vector(Vector([0, 1, 0, 1]))
         L.add_vector(Vector([0, 0, 2, 2]))
-        L.add_vector(Vector([0, 1, 2, 3]))
-        self.assertEqual(str(L), 
-                        "[0 1 2 3]\n"
-                        "[0 0 2 2]")
-        L.HNFify()
         self.assertEqual(str(L), 
                         "[0 1 0 1]\n"
                         "[0 0 2 2]")
 
     def test_hnf(self):
-        L = Lattice(2)
+        L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 3]))
         L.add_vector(Vector([0, 2]))
         L.HNFify()
@@ -400,7 +406,7 @@ class TestLattice(unittest.TestCase):
              [0, 2]]
         )
 
-        L = Lattice(2)
+        L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([5, -10]))
         L.add_vector(Vector([0, -1]))
         L.HNFify()
@@ -410,7 +416,7 @@ class TestLattice(unittest.TestCase):
              [0, 1]]
         )
 
-        L = Lattice(2)
+        L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 3]))
         L.add_vector(Vector([0, 1]))
         L.HNFify()
@@ -420,11 +426,12 @@ class TestLattice(unittest.TestCase):
              [0, 1]]
         )
 
-        L = Lattice(2, HNF_policy=1)
+        L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 1]))
         L.add_vector(Vector([-2, 0]))
         L.add_vector(Vector([-3, -1]))
         L.add_vector(Vector([-2, -1]))
+        L.HNFify()
         self.assertEqual(
             [vec.tolist() for vec in L.get_basis()],
             [[1, 0],
@@ -432,7 +439,7 @@ class TestLattice(unittest.TestCase):
         )
 
         # From https://en.wikipedia.org/wiki/Hermite_normal_form
-        L = Lattice(4)
+        L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([2, 3, 6, 2]))
         L.add_vector(Vector([5, 6, 1, 6]))
         L.add_vector(Vector([8, 3, 1, 1]))
@@ -444,7 +451,7 @@ class TestLattice(unittest.TestCase):
             [0, 0, 61, -13]]
         )
 
-        L = Lattice(4)
+        L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 0, 1, 1]))
         L.add_vector(Vector([0, 1, 0, 0]))
         L.add_vector(Vector([0, 0, 19, 1]))
@@ -458,7 +465,7 @@ class TestLattice(unittest.TestCase):
         )
 
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
-        L = Lattice(5)
+        L = Lattice(5, HNF_policy=self.HNF_POLICY)
         for k in range(0, 25, 5):
             L.add_vector(Vector(list(range(k, k+5))))
         L.HNFify()
@@ -468,7 +475,7 @@ class TestLattice(unittest.TestCase):
              [   0,   1,   2,   3,   4]],
         )
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([ 1,  2,  3]))
         L.add_vector(Vector([ 4,  5,  6]))
         L.add_vector(Vector([ 7,  8,  9]))
@@ -481,30 +488,30 @@ class TestLattice(unittest.TestCase):
             [0, 3, 6]],
         )
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 0, 0]))
         L.add_vector(Vector([0, 0, 0]))
         L.add_vector(Vector([0, 0, 0]))
         L.HNFify()
         self.assertEqual(L.get_basis(), [])
 
-        L = Lattice(1)
+        L = Lattice(1, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0]))
         L.add_vector(Vector([0]))
         L.add_vector(Vector([0]))
         L.HNFify()
         self.assertEqual(L.get_basis(), [])
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 0, 0]))
         L.HNFify()
         self.assertEqual(L.get_basis(), [])
 
-        L = Lattice(0)
+        L = Lattice(0, HNF_policy=self.HNF_POLICY)
         L.HNFify()
         self.assertEqual(L.get_basis(), [])
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 2, 3]))
         L.add_vector(Vector([4, 5, 6]))
         L.add_vector(Vector([7, 8, 9]))
@@ -515,7 +522,7 @@ class TestLattice(unittest.TestCase):
              [0, 3, 6]],
         )
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 2, 3]))
         L.add_vector(Vector([4, 5, 6]))
         L.add_vector(Vector([7, 8, 9]))
@@ -527,7 +534,7 @@ class TestLattice(unittest.TestCase):
              [0, 0, 3]],
         )
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 0, 3]))
         L.add_vector(Vector([0,-2, 2]))
         L.add_vector(Vector([0, 1, 2]))
@@ -539,7 +546,7 @@ class TestLattice(unittest.TestCase):
              [0, 0, 3]],
         )
 
-        L = Lattice(10)
+        L = Lattice(10, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([-2, 1, 9, 2, -8, 1, -3, -1, -4, -1]))
         L.add_vector(Vector([5, -2, 0, 1, 0, 4, -1, 1, -2, 0]))
         L.add_vector(Vector([-11, 3, 1, 0, -3, -2, -1, -11, 2, -2]))
@@ -564,7 +571,7 @@ class TestLattice(unittest.TestCase):
 
         # From Arne Storjohann (1998).
         # "Computing Hermite and Smith normal forms of triangular integer matrices"
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([5, 2342, 1843]))
         L.add_vector(Vector([0,   78, 8074]))
         L.add_vector(Vector([0,    0,   32]))
@@ -576,7 +583,7 @@ class TestLattice(unittest.TestCase):
              [0,  0, 32]]
         )
 
-        L = Lattice(4)
+        L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([8, 11286,  4555,  46515]))
         L.add_vector(Vector([0,     1, 66359, 153094]))
         L.add_vector(Vector([0,     0,     9,  43651]))
@@ -592,7 +599,7 @@ class TestLattice(unittest.TestCase):
 
         # From Pernet and Stein (2009)
         # "Fast computation of Hermite normal forms of random integer matrices"
-        L = Lattice(6)
+        L = Lattice(6, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([-5,  8, -3, -9,  5,  5]))
         L.add_vector(Vector([-2,  8, -2, -2,  8,  5]))
         L.add_vector(Vector([ 7, -5, -8,  4,  3, -4]))
@@ -614,7 +621,7 @@ class TestLattice(unittest.TestCase):
                     Vector(random.choices(VALUES, k=N))
                     for _ in range(random.randrange(N + 2))
                 ]
-                L = Lattice(N)
+                L = Lattice(N, HNF_policy=self.HNF_POLICY)
                 for vec in vecs:
                     L.add_vector(vec)
                     L2 = L.copy()
@@ -635,7 +642,7 @@ class TestLattice(unittest.TestCase):
     def test_smith_diagonal(self):
         # From Arne Storjohann (1998).
         # "Computing Hermite and Smith normal forms of triangular integer matrices"
-        L = Lattice(5)
+        L = Lattice(5, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 113344, 95472, 42884, 12302]))
         L.add_vector(Vector([0,      2,  1576, 98594, 11872]))
         L.add_vector(Vector([0,      0,     2, 99206, 94692]))
@@ -644,25 +651,25 @@ class TestLattice(unittest.TestCase):
         self.assertEqual(L.smith_diagonal(), [1, 2, 6, 24])
 
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 0, 1]))
         L.add_vector(Vector([0, 1, 0]))
         self.assertEqual(L.smith_diagonal(), [1, 1])
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 1, 2]))
         L.add_vector(Vector([3, 4, 5]))
         L.add_vector(Vector([6, 7, 8]))
         self.assertEqual(L.smith_diagonal(), [1, 3])
 
-        L = Lattice(4)
+        L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3,4,5,6]))
         L.add_vector(Vector([7,3,8,10]))
         L.add_vector(Vector([14,5,6,7]))
         L.add_vector(Vector([2,2,10,9]))
         self.assertEqual(L.smith_diagonal(), [1, 1, 1, 687])
 
-        L = Lattice(3)
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1,5,7]))
         L.add_vector(Vector([3,6,9]))
         L.add_vector(Vector([0,1,2]))
@@ -702,10 +709,17 @@ class TestLattice(unittest.TestCase):
                 lcm = abs(a * b) // g
                 expected = [g, lcm]
 
-            L = Lattice(2)
+            L = Lattice(2, HNF_policy=self.HNF_POLICY)
             L.add_vector(A)
             L.add_vector(B)
             self.assertEqual(L.smith_diagonal(), expected)
+
+
+class TestLatticeHNFPolicy0(LatticeTests, unittest.TestCase):
+    HNF_POLICY = 0
+
+class TestLatticeHNFPolicy1(LatticeTests, unittest.TestCase):
+    HNF_POLICY = 1
 
 if __name__ == "__main__":
     unittest.main(exit=False)
