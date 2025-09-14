@@ -902,17 +902,6 @@ Vector_num_pointers(TagInt *x, Py_ssize_t N)
     return result;
 }
 
-static bool
-Vector_has_pointers(TagInt *x, Py_ssize_t N)
-{
-    for (Py_ssize_t i = 0; i < N; i++) {
-        if (TagInt_is_pointer(x[i])) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static PyObject *
 Vector__num_bigints(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
@@ -1473,7 +1462,6 @@ typedef struct {
     Py_ssize_t *col_to_pivot; // length=N. -1 if no pivot
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
     int HNF_policy;
-    bool seen_bigints;
     bool errored;
     Py_ssize_t first_HNF_row;
     TagInt *buffer_for_tagints; // Space for (N+1)*N TagInts
@@ -1528,7 +1516,6 @@ Lattice_clear(PyObject *self) {
     }
     L->num_zero_columns = N;
     L->first_HNF_row = 0;
-    L->seen_bigints = false;
 }
 
 static void
@@ -1753,7 +1740,6 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     L->row_to_pivot = row_to_pivot;
     L->col_to_pivot = col_to_pivot;
     L->HNF_policy = HNF_policy;
-    L->seen_bigints = false;
     L->errored = false;
     L->first_HNF_row = 0;
     L->buffer_for_tagints = buffer_for_tagints;
@@ -1812,7 +1798,6 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     for (Py_ssize_t k = 0; k < nzc; k++) {
         L_copy->zero_columns[k] = L->zero_columns[k];
     }
-    L_copy->seen_bigints = L->seen_bigints;
     L_copy->first_HNF_row = L->first_HNF_row;
     return (PyObject *)L_copy;
 }
@@ -2009,7 +1994,6 @@ Lattice_insert_vector_with_pivot(Lattice *L, TagInt *vec, Py_ssize_t j)
     L->first_HNF_row = Py_MAX(L->first_HNF_row, where) + 1;
     assert(L->first_HNF_row <= L->rank);
 
-    L->seen_bigints = L->seen_bigints || Vector_has_pointers(&vec[j], L->N-j);
     return where;
 }
 
@@ -2030,11 +2014,6 @@ modified_row(Lattice *L, Py_ssize_t i)
     if (i >= L->first_HNF_row) {
         L->first_HNF_row = i + 1;
         assert(L->first_HNF_row <= L->rank);
-    }
-    if (!L->seen_bigints) {
-        Py_ssize_t j = L->row_to_pivot[i];
-        TagInt *vec = L->basis[i];
-        L->seen_bigints = Vector_has_pointers(&vec[j], L->N - j);
     }
 }
 
