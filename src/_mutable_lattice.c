@@ -217,6 +217,8 @@ static inline intptr_t unpack_integer(TagInt t) {
     return t.bits / 2;
 }
 
+#define TagInt_ONE ((TagInt) {.bits = 2})
+
 static inline bool TagInt_is_zero(TagInt t) {
     return (t.bits == 0);
 }
@@ -1784,8 +1786,33 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
 
 static PyObject *
 Lattice_full(PyTypeObject *type, PyObject *arg) {
-    PyErr_SetString(PyExc_NotImplementedError, "oops");
-    return NULL;
+    if (!PyLong_Check(arg)) {
+        PyErr_SetString(PyExc_TypeError, "Lattice.full(N) argument must be integer");
+        return NULL;
+    }
+    Py_ssize_t N = PyLong_AsSsize_t(arg);
+    if (N == -1 && PyErr_Occurred()) {
+        return NULL;
+    }
+    if (N < 0) {
+        PyErr_SetString(PyExc_ValueError, "Lattice.full(N) argument cannot be negative");
+        return NULL;
+    }
+    Lattice *L = (Lattice *)Lattice_new_impl(type, N, 1, N);
+    if (L == NULL) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < N; i++) {
+        L->row_to_pivot[i] = i;
+        L->col_to_pivot[i] = i;
+        L->basis[i] = L->buffer_for_tagints + N*i;
+        L->basis[i][i] = TagInt_ONE;
+    }
+    L->rank = N;
+    L->num_zero_columns = 0;
+    L->is_full = true;
+    L->first_HNF_row = 0;
+    return (PyObject *)L;
 }
 
 static PyObject *
@@ -2920,6 +2947,8 @@ static PyMethodDef Lattice_methods[] = {
      "The same as L.invariants(), but exclude zeros and don't guarantee any divisibility."},
     {"is_full", Lattice_is_full, METH_NOARGS,
      "Returns True iff the lattice is the entirety of Z^N"},
+    {"full", (PyCFunction)Lattice_full, METH_O | METH_CLASS,
+     "Returns the entire lattice Z^N"},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

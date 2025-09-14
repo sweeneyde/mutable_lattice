@@ -811,5 +811,12 @@ class TestLatticeAPI(unittest.TestCase):
                     L.add_vector(vec)
                 self.assertIs(L.is_full(), True)
 
+    def test_full(self):
+        Lattice.full(0)._assert_consistent()
+        Lattice.full(1)._assert_consistent()
+        Lattice.full(2)._assert_consistent()
+        Lattice.full(3)._assert_consistent()
+
+
 if __name__ == "__main__":
     unittest.main(exit=False)
