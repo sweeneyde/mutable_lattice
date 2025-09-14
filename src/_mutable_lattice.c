@@ -1457,6 +1457,7 @@ typedef struct {
     PyObject_VAR_HEAD
     Py_ssize_t N; // The ambient dimension; we're a sublattice of ZZ^N
     Py_ssize_t rank; // The number of basis vectors
+    Py_ssize_t maxrank; // How many vectors we have space for
     Py_ssize_t num_zero_columns;
     Py_ssize_t *zero_columns;
     Py_ssize_t *col_to_pivot; // length=N. -1 if no pivot
@@ -1482,7 +1483,7 @@ Lattice_push_vector(Lattice *L, TagInt *vec)
 {
     // Naively push a vector to the end of the basis.
     Py_ssize_t N = L->N;
-    assert(L->rank <= N);
+    assert(L->rank <= L->maxrank);
     TagInt *buf = L->buffer_for_tagints + N*L->rank;
     for (Py_ssize_t j = 0; j < N; j++) {
         buf[j] = TagInt_copy(vec[j]);
@@ -1549,6 +1550,8 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
     Py_ssize_t N = L->N;
     Py_ssize_t R = L->rank;
     assert(R <= N);
+    assert(R <= L->maxrank);
+    assert(L->maxrank <= N);
     TagInt **basis = L->basis;
 
     Py_ssize_t nzc = L->num_zero_columns;
@@ -1703,21 +1706,21 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 }
 
 static PyObject *
-Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
+Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t maxrank)
 {
-
     static_assert(sizeof(TagInt) == sizeof(void *));
     static_assert(sizeof(Py_ssize_t) == sizeof(void *));
     // We need:
-    //   4*N words for the Py_ssize_t data,
+    //   3*N words for the Py_ssize_t data,
     // + N words for the basis
-    // + N*(N+1) words for the buffers
-    // == N*(N+6)
-    if (N && N > PY_SSIZE_T_MAX/N - 5) {
+    // + N*(maxrank+1) words for the buffers
+    // == N*(maxrank+5)
+    assert(maxrank >= 0);
+    if (N && maxrank > PY_SSIZE_T_MAX/N - 5) {
         PyErr_SetString(PyExc_OverflowError, "Lattice was too big to construct");
         return NULL;
     }
-    Lattice *L = (Lattice *)type->tp_alloc(type, N*(N+6));
+    Lattice *L = (Lattice *)type->tp_alloc(type, N*(maxrank+5));
     if (!L) {
         return NULL;
     }
@@ -1727,9 +1730,9 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
     Py_ssize_t *col_to_pivot = (Py_ssize_t *)&buffer[2*N];
     Py_ssize_t *row_to_pivot = (Py_ssize_t *)&buffer[3*N];
     TagInt *buffer_for_tagints = (TagInt *)&buffer[4*N];
-    assert(TagInt_is_zero(buffer_for_tagints[N*(N+1)-1]));
-
+    assert(TagInt_is_zero(buffer_for_tagints[N*(maxrank+1)-1]));
     L->N = N;
+    L->maxrank = maxrank;
     L->rank = 0;
     L->num_zero_columns = N;
     L->zero_columns = zero_columns;
@@ -1748,10 +1751,11 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy)
 
 static PyObject *
 Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
-    static char *kwlist[] = {"", "HNF_policy", NULL};
+    static char *kwlist[] = {"", "HNF_policy", "maxrank", NULL};
     Py_ssize_t N;
-    int HNF_policy = 0;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "n|i", kwlist, &N, &HNF_policy)) {
+    Py_ssize_t maxrank = -1;
+    int HNF_policy = 1;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "n|$in", kwlist, &N, &HNF_policy, &maxrank)) {
         return NULL;
     }
     if (N < 0) {
@@ -1762,7 +1766,14 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
         PyErr_SetString(PyExc_ValueError, "unknown HNF_policy");
         return NULL;
     }
-    return Lattice_new_impl(type, N, HNF_policy);
+    if (maxrank < -1) {
+        PyErr_SetString(PyExc_ValueError, "maxrank must be >= -1");
+        return NULL;
+    }
+    if (maxrank == -1 || maxrank > N) {
+        maxrank = N;
+    }
+    return Lattice_new_impl(type, N, HNF_policy, maxrank);
 }
 
 static PyObject *
@@ -1781,7 +1792,7 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
     }
     Py_ssize_t R = L->rank;
     Py_ssize_t N = L->N;
-    Lattice *L_copy = (Lattice *)Lattice_new_impl(Py_TYPE(self), N, L->HNF_policy);
+    Lattice *L_copy = (Lattice *)Lattice_new_impl(Py_TYPE(self), N, L->HNF_policy, L->maxrank);
     if (L_copy == NULL) {
         return NULL;
     }
@@ -2197,6 +2208,11 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
             }
             continue;
         }
+        if (L->rank == L->maxrank) {
+            PyErr_SetString(PyExc_IndexError, "Lattice rank would exceed maxrank");
+            L->errored = true;
+            return true;
+        }
         i = Lattice_insert_vector_with_pivot(L, vec, j);
         return Lattice_apply_HNF_policy(L);
     }
@@ -2253,7 +2269,7 @@ Lattice_get_basis(PyObject *self, PyObject *Py_UNUSED(ignored))
 static bool
 Lattice_inplace_add_impl(Lattice *L, Lattice *other)
 {
-    for (Py_ssize_t i = 0; i < other->rank; i++) {
+    for (Py_ssize_t i = other->rank - 1; i >= 0; i--) {
         if (Lattice_add_vector_impl(L, other->basis[i])) {
             return true;
         }
@@ -2521,10 +2537,6 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
             if (TagInt_is_zero(above)) {
                 continue;
             }
-            if (TagInt_is_one(pivot) && N - jj == 1) {
-                destroy_TagInt(&row_to_reduce[jj]);
-                continue;
-            }
 #if USE_FAST_PATHS
             if (!TagInt_is_pointer(above) && !TagInt_is_pointer(pivot)) {
                 assert(pivot.bits/2 > 0);
@@ -2656,7 +2668,8 @@ Lattice_unnormalized_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored)
             }
         }
         // Transpose with these deletions
-        Lattice *next_L = (Lattice *)Lattice_new_impl(&Lattice_Type, L->rank - num_deletions, L->HNF_policy);
+        Py_ssize_t next_R = L->rank - num_deletions;
+        Lattice *next_L = (Lattice *)Lattice_new_impl(&Lattice_Type, next_R, L->HNF_policy, next_R);
         if (next_L == NULL) {
             goto error;
         }
@@ -2742,12 +2755,7 @@ Lattice_smith_diagonal(PyObject *self, PyObject *Py_UNUSED(ignored))
             }
             did_mingle = true;
         }
-        if (did_mingle) {
-            if (PyList_Sort(result) < 0) {
-                goto error;
-            }
-        }
-        else {
+        if (!did_mingle) {
             break;
         }
     }
@@ -2865,9 +2873,11 @@ static PyMethodDef Lattice_methods[] = {
 };
 
 static PyMemberDef Lattice_members[] = {
-    {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY},
     {"ambient_dimension", Py_T_PYSSIZET, offsetof(PyVarObject, ob_size), Py_READONLY},
-    {"first_HNF_row", Py_T_PYSSIZET, offsetof(Lattice, first_HNF_row), Py_READONLY},
+    {"maxrank", Py_T_PYSSIZET, offsetof(Lattice, maxrank), Py_READONLY},
+    {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY},
+    {"HNF_policy", Py_T_INT, offsetof(Lattice, HNF_policy), Py_READONLY},
+    {"_first_HNF_row", Py_T_PYSSIZET, offsetof(Lattice, first_HNF_row), Py_READONLY},
     {NULL}
 };
 

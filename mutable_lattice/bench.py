@@ -17,7 +17,7 @@ def bench(N, HNF_policy):
             for _ in range(N)
         ]
         t0 = perf_counter()
-        L = Lattice(N, HNF_policy)
+        L = Lattice(N, HNF_policy=HNF_policy)
         for vec in data:
             L.add_vector(vec)
             for vec2 in data:

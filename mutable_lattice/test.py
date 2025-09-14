@@ -721,5 +721,84 @@ class TestLatticeHNFPolicy0(LatticeTests, unittest.TestCase):
 class TestLatticeHNFPolicy1(LatticeTests, unittest.TestCase):
     HNF_POLICY = 1
 
+class TestLatticeAPI(unittest.TestCase):
+
+    def test_construction(self):
+        with self.assertRaises(TypeError):
+            Lattice()
+        with self.assertRaises(TypeError):
+            Lattice(N=2)
+        with self.assertRaises(TypeError):
+            Lattice(2, 0, 0)
+
+        for N in range(5):
+            L = Lattice(N)
+            self.assertEqual(L.maxrank, N)
+            self.assertEqual(L.HNF_policy, 1)
+            L = Lattice(N, maxrank=-1)
+            self.assertEqual(L.maxrank, N)
+            self.assertEqual(L.HNF_policy, 1)
+
+            with self.assertRaises(ValueError):
+                Lattice(N, maxrank=-5)
+            with self.assertRaises(ValueError):
+                Lattice(N, maxrank=-5, HNF_policy=0)
+            with self.assertRaises(ValueError):
+                Lattice(N, maxrank=-5, HNF_policy=1)
+            with self.assertRaises(ValueError):
+                Lattice(N, maxrank=0, HNF_policy=10)
+
+            for HNF_policy in [0, 1]:
+                for maxrank in range(N+3):
+                    L = Lattice(N, maxrank=maxrank, HNF_policy=HNF_policy)
+                    self.assertEqual(L.maxrank, min(N, maxrank))
+                    self.assertEqual(L.HNF_policy, HNF_policy)
+
+    def test_maxrank(self):
+        L = Lattice(3, maxrank=0)
+        # should be able to add the zero vector
+        L.add_vector(Vector([0, 0, 0]))
+        with self.assertRaises(IndexError):
+            # should not be able to add any other vector
+            L.add_vector(Vector([0, 5, 0]))
+        with self.assertRaises(RuntimeError):
+            # After any attempt, should cause errors
+            L.add_vector(Vector([0, 5, 0]))
+
+        L = Lattice(3, maxrank=1)
+        L.add_vector(Vector([2, 2, 2]))
+        L.add_vector(Vector([0, 0, 0]))
+        L.add_vector(Vector([4, 4, 4]))
+        L.add_vector(Vector([3, 3, 3]))
+        L.add_vector(Vector([3, 3, 3]))
+        with self.assertRaises(IndexError):
+            L.add_vector(Vector([0, 5, 0]))
+        with self.assertRaises(RuntimeError):
+            L.add_vector(Vector([0, 5, 0]))
+
+        L = Lattice(3, maxrank=2)
+        L.add_vector(Vector([2, 0, 0]))
+        L.add_vector(Vector([0, 2, 0]))
+        L.add_vector(Vector([10, 200000000, 0]))
+        with self.assertRaises(IndexError):
+            L.add_vector(Vector([0, 0, 1]))
+        with self.assertRaises(RuntimeError):
+            L.add_vector(Vector([0, 0, 1]))
+
+        for N in range(5):
+            basis = [Vector([0]*i + [1] + [0]*(N-1-i)) for i in range(N)]
+            for maxrank in range(N+1):
+                L = Lattice(N, maxrank=maxrank)
+                for vec in basis[:maxrank]:
+                    L.add_vector(vec)
+                self.assertEqual(L.rank, maxrank)
+                if maxrank < N:
+                    with self.assertRaises(IndexError):
+                        L.add_vector(basis[maxrank])
+                    for vec in basis[maxrank:]:
+                        with self.assertRaises(RuntimeError):
+                            L.add_vector(vec)
+
+
 if __name__ == "__main__":
     unittest.main(exit=False)
