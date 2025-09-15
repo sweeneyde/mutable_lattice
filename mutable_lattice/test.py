@@ -293,6 +293,21 @@ class LatticeTests:
         self.VALUES.clear()
         del self.VALUES
 
+    def test_add_vector(self):
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
+        L.add_vector(Vector([1, 0, 0]))
+        L.add_vector([0, 2, 0])
+        L.add_vector(Vector([0, 0, 3]))
+        self.assertEqual(L.tolist(), [[1, 0, 0], [0, 2, 0], [0, 0, 3]])
+
+    def test_add_vector_errors(self):
+        L = Lattice(3, HNF_policy=self.HNF_POLICY)
+        with self.assertRaises(TypeError): L.add_vector(None)
+        with self.assertRaises(TypeError): L.add_vector([None])
+        with self.assertRaises(TypeError): L.add_vector((1,2,3))
+        with self.assertRaises(ValueError): L.add_vector([1, 2, 3, 4])
+        with self.assertRaises(ValueError): L.add_vector(Vector([1, 2, 3, 4]))
+
     def test_random(self):
         VALUES = self.VALUES
         for N in [0, 1, 2, 3, 4, 5, 10, 20]:
@@ -795,6 +810,7 @@ class TestLatticeAPI(unittest.TestCase):
                     for vec in basis[maxrank:]:
                         with self.assertRaises(RuntimeError):
                             L.add_vector(vec)
+            self.assertEqual(Lattice(N, maxrank=N+5).maxrank, N)
 
     def test_is_full(self):
         for HNF_policy in [0, 1]:
@@ -843,6 +859,24 @@ class TestLatticeAPI(unittest.TestCase):
             "Lattice(3, [[1, 2, 3], [0, 0, 1]], maxrank=2, HNF_policy=0)",
         ]:
             self.assertEqual(repr(eval(expr)), expr)
+
+    def test_pickle(self):
+        import pickle
+        for L in [
+            Lattice(0),
+            Lattice(10),
+            Lattice(10, maxrank=5),
+            Lattice(10, HNF_policy=0),
+            Lattice(10, maxrank=4, HNF_policy=0),
+            Lattice(3, [[1, 2, 3]]),
+            Lattice(3, [[1, 2, 3], [0, 0, 5]]),
+            Lattice(3, [[1, 2, 3], [0, 3, 1], [0, 0, 5]]),
+            Lattice(3, [[1, 2, 3], [0, 1, 0], [0, 0, 1]], HNF_policy=0),
+            Lattice(3, [[1, 2, 3], [0, 0, 1]], maxrank=2, HNF_policy=0),
+        ]:
+            L2 = pickle.loads(pickle.dumps(L))
+            self.assertEqual(L2, L)
+            self.assertEqual(repr(L2), repr(L))
 
 if __name__ == "__main__":
     unittest.main(exit=False)

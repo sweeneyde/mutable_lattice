@@ -3044,6 +3044,20 @@ error:
     return result;
 }
 
+static PyObject *
+Lattice___getnewargs_ex__(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    assert(Py_TYPE(self) == &Lattice_Type);
+    Lattice *L = (Lattice *)self;
+    PyObject *tolist = Lattice_tolist(self, NULL);
+    if (tolist == NULL) {
+        return NULL;
+    }
+    return Py_BuildValue("(nN){snsn}",
+        L->N, tolist,
+        "HNF_policy", L->HNF_policy, "maxrank", L->maxrank);
+}
+
 static PyMethodDef Lattice_methods[] = {
     {"clear", (PyCFunction)Lattice_clear, METH_NOARGS,
      "L.clear() replaces the Lattice with the zero Lattice in the same ambient dimension"},
@@ -3073,6 +3087,8 @@ static PyMethodDef Lattice_methods[] = {
      "Returns True iff the lattice is the entirety of Z^N"},
     {"full", (PyCFunction)Lattice_full, METH_O | METH_CLASS,
      "Returns the entire lattice Z^N"},
+    {"__getnewargs_ex__", Lattice___getnewargs_ex__, METH_NOARGS,
+     "get the arguments to reconstruct this Lattice"},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 
