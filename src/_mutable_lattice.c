@@ -1886,6 +1886,61 @@ static bool
 Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix);
 
 static int
+Lattice_nomutate_make_zero_at_entry_with_objects(
+    TagInt *vecj, TagInt *rowj, Py_ssize_t N_j, PyObject **q_out)
+{
+    // Helper function for Lattice_contains.
+    // Try to make "vecj" zero at its first entry
+    //   (Use pointer arithmetic to make vec zero at its jth entry)
+    // Returns: -1 if error,
+    //           1 if successfully made zero (and assigns the coefficient to *q_out),
+    //           0 if impossible to make zero.
+    PyObject *a_obj = TagInt_to_object(rowj[0]);
+    if (a_obj == NULL) {
+        return -1;
+    }
+    PyObject *b_obj = TagInt_to_object(vecj[0]);
+    if (b_obj == NULL) {
+        Py_DECREF(a_obj);
+        return -1;
+    }
+    PyObject *rem = pylong_remainder(b_obj, a_obj);
+    if (rem == NULL) {
+        Py_DECREF(a_obj);
+        Py_DECREF(b_obj);
+        return -1;
+    }
+    int not_a_multiple = pylong_bool(rem);
+    Py_DECREF(rem);
+    if (not_a_multiple) {
+        // This pivot can't zero this entry
+        Py_DECREF(a_obj);
+        Py_DECREF(b_obj);
+        return 0;
+    }
+    PyObject *q = pylong_floor_divide(b_obj, a_obj);
+    Py_DECREF(a_obj);
+    Py_DECREF(b_obj);
+    if (q == NULL) {
+        return -1;
+    }
+    PyObject *neg_q = pylong_negative(q);
+    if (neg_q == NULL) {
+        Py_DECREF(q);
+        return -1;
+    }
+    // This is doing "vec -= q * row"
+    if (row_op_impl_with_objects(rowj, vecj, N_j, neg_q)) {
+        Py_DECREF(neg_q);
+        Py_DECREF(q);
+        return -1;
+    }
+    Py_DECREF(neg_q);
+    *q_out = q;
+    return 1;
+}
+
+static int
 Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
 {
     vec = Lattice_push_vector(L, vec);
@@ -1908,10 +1963,6 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             if (vecj % rowj != 0) {
                 goto not_present;
             }
-            if (N - i == 1) {
-                destroy_TagInt(&vec[j]);
-                continue;
-            }
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
@@ -1924,52 +1975,14 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
             continue;
         }
 #endif
-        PyObject *a_obj = TagInt_to_object(row[j]);
-        if (a_obj == NULL) {
-            goto error;
+        // Same thing, but slower: use PyObjects
+        PyObject *q;
+        switch (Lattice_nomutate_make_zero_at_entry_with_objects(&vec[j], &row[j], N-j, &q)) {
+            case -1: goto error;
+            case 0: goto not_present;
+            case 1: break;
         }
-        PyObject *b_obj = TagInt_to_object(vec[j]);
-        if (b_obj == NULL) {
-            Py_DECREF(a_obj);
-            goto error;
-        }
-        PyObject *rem = pylong_remainder(b_obj, a_obj);
-        if (rem == NULL) {
-            Py_DECREF(a_obj);
-            Py_DECREF(b_obj);
-            goto error;
-        }
-        int not_a_multiple = pylong_bool(rem);
-        Py_DECREF(rem);
-        if (not_a_multiple) {
-            // This pivot can't zero this entry
-            Py_DECREF(a_obj);
-            Py_DECREF(b_obj);
-            goto not_present;
-        }
-        if (N - i == 1) {
-            destroy_TagInt(&vec[j]);
-            Py_DECREF(a_obj);
-            Py_DECREF(b_obj);
-            continue;
-        }
-        PyObject *q = pylong_floor_divide(b_obj, a_obj);
-        Py_DECREF(a_obj);
-        Py_DECREF(b_obj);
-        if (q == NULL) {
-            goto error;
-        }
-        PyObject *neg_q = pylong_negative(q);
         Py_DECREF(q);
-        if (neg_q == NULL) {
-            goto error;
-        }
-        // This is doing "vec -= q * row"
-        if (row_op_impl_with_objects(&row[j], &vec[j], N-j, neg_q)) {
-            Py_DECREF(neg_q);
-            goto error;
-        }
-        Py_DECREF(neg_q);
         assert(TagInt_is_zero(vec[j]));
     }
     // Everything became zero, so the vector is present.
@@ -2035,6 +2048,135 @@ Lattice_contains(PyObject *self, PyObject *other)
         return -1;
     }
     return Lattice_contains_impl((Lattice *)self, Vector_get_vec(other), 0);
+}
+
+static PyObject *
+Lattice_coefficients_of(PyObject *self, PyObject *other)
+{
+    if (Py_TYPE(other) != &Vector_Type) {
+        PyErr_SetString(PyExc_TypeError, "L.coefficients_of(v) argument must be Vector");
+        return NULL;
+    }
+    Lattice *L = (Lattice *)self;
+    Py_ssize_t N = L->N, R = L->rank;
+    if (Py_SIZE(other) != L->N) {
+        PyErr_SetString(PyExc_ValueError, "L.coefficients_of(v) argument length mismatch");
+        return NULL;
+    }
+    PyObject *result = Vector_zero_impl(&Vector_Type, L->rank);
+    if (result == NULL) {
+        return NULL;
+    }
+    TagInt *result_vec = Vector_get_vec(result);
+    TagInt *vec = Lattice_push_vector(L, Vector_get_vec(other));
+    for (Py_ssize_t i = 0; i < R; i++) {
+        Py_ssize_t j = L->row_to_pivot[i];
+        if (TagInt_is_zero(vec[j])) {
+            continue;
+        }
+        TagInt *row = L->basis[i];
+#if USE_FAST_PATHS
+        if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
+            intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+            assert(rowj != 0);
+            assert(vecj != 0);
+            if (vecj % rowj != 0) {
+                goto not_present;
+            }
+            intptr_t q = vecj / rowj;
+            if (!is_packable_int(q)) {
+                // If vecj==INTPTR_MIN/2 and rowj==-1.
+                goto slowpath;
+            }
+            intptr_t neg_q = -q;
+            PyObject *neg_q_obj = NULL;
+            if (row_op_impl_with_intptr(&row[j], &vec[j], N-j, neg_q, &neg_q_obj)) {
+                Py_XDECREF(neg_q_obj);
+                goto error;
+            }
+            Py_XDECREF(neg_q_obj);
+            assert(TagInt_is_zero(vec[j]));
+            result_vec[i] = pack_integer(q);
+            continue;
+        }
+#endif
+    slowpath:
+        PyObject *q;
+        switch (Lattice_nomutate_make_zero_at_entry_with_objects(&vec[j], &row[j], N-j, &q)) {
+            case -1: goto error;
+            case 0: goto not_present;
+            case 1: break;
+        }
+        assert(TagInt_is_zero(vec[j]));
+        if (object_to_TagInt_steal(q, &result_vec[i])) {
+            goto error;
+        }
+    }
+    bool nonzero = false;
+    for (Py_ssize_t j = 0; j < N; j++) {
+        if (!TagInt_is_zero(vec[j])) {
+            nonzero = true;
+            destroy_TagInt(&vec[j]);
+        }
+    }
+    if (nonzero) {
+        goto not_present;
+    }
+    // Already cleared out the pushed vector
+    return result;
+error:
+    Lattice_pop_vector(L, 0);
+    return NULL;
+not_present:
+    Lattice_pop_vector(L, 0);
+    PyErr_SetString(PyExc_KeyError, "Vector not present in Lattice");
+    return NULL;
+}
+
+static PyObject *
+Lattice_linear_combination(PyObject *self, PyObject *other)
+{
+    Lattice *L = (Lattice *)self;
+    Py_ssize_t N = L->N, R = L->rank;
+    if (Py_TYPE(other) != &Vector_Type) {
+        PyErr_SetString(PyExc_TypeError, "L.linear_combination(w) argument must be Vector");
+        return NULL;
+    }
+    if (Py_SIZE(other) != R) {
+        PyErr_SetString(PyExc_ValueError, "L.linear_combination(w) argument must have length L.rank");
+        return NULL;
+    }
+    TagInt *coefficients = Vector_get_vec(other);
+    PyObject *result = Vector_zero_impl(&Vector_Type, N);
+    if (result == NULL) {
+        return result;
+    }
+    TagInt *vec = Vector_get_vec(result);
+    for (Py_ssize_t i = 0; i < R; i++) {
+        TagInt c = coefficients[i];
+        if (TagInt_is_zero(c)) {
+            continue;
+        }
+        Py_ssize_t j = L->row_to_pivot[i];
+        TagInt *row = L->basis[i];
+        if (TagInt_is_pointer(c)) {
+            if (row_op_impl_with_objects(&row[j], &vec[j], N-j, untag_pointer(c))) {
+                goto error;
+            }
+        }
+        else {
+            PyObject *c_object = NULL;
+            if (row_op_impl_with_intptr(&row[j], &vec[j], N-j, unpack_integer(c), &c_object)) {
+                Py_XDECREF(c_object);
+                goto error;
+            }
+            Py_XDECREF(c_object);
+        }
+    }
+    return result;
+error:
+    Py_DECREF(result);
+    return NULL;
 }
 
 static Py_ssize_t
@@ -3089,6 +3231,10 @@ static PyMethodDef Lattice_methods[] = {
      "Returns the entire lattice Z^N"},
     {"__getnewargs_ex__", Lattice___getnewargs_ex__, METH_NOARGS,
      "get the arguments to reconstruct this Lattice"},
+    {"coefficients_of", Lattice_coefficients_of, METH_O,
+     "L.coefficients_of(v) returns the vector of coefficients needed to write L as linear combination of vectors in L."},
+    {"linear_combination", Lattice_linear_combination, METH_O,
+     "L.coefficients_of(w) returns the linear combination of the basis vectors of L with coefficients given by w."},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

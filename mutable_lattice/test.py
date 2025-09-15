@@ -348,6 +348,28 @@ class LatticeTests:
                         also_outside += q*vec
                         self.assertNotIn(also_outside, submod)
 
+    def test_coefficients_of_random(self):
+        VALUES = self.VALUES
+        for N in range(10):
+            for R in range(10):
+                for _ in range(5):
+                    L = Lattice(N, maxrank=R, HNF_policy=self.HNF_POLICY)
+                    for _ in range(R):
+                        L.add_vector(Vector(random.choices(VALUES, k=N)))
+                    for _ in range(5):
+                        w = Vector(random.choices(VALUES, k=L.rank))
+                        v = L.linear_combination(w)
+                        self.assertIn(v, L)
+                        self.assertEqual(L.coefficients_of(v), w)
+                    for _ in range(5):
+                        v = Vector(random.choices(VALUES, k=N))
+                        if v in L:
+                            w = L.coefficients_of(v)
+                            self.assertEqual(L.linear_combination(w), v)
+                        else:
+                            with self.assertRaises(KeyError):
+                                L.coefficients_of(v)
+
     def test_against_pylattice(self):
         VALUES = self.VALUES
         for N in [0, 1, 2, 3, 4, 5]:
@@ -876,12 +898,48 @@ class TestLatticeAPI(unittest.TestCase):
         ]:
             L2 = pickle.loads(pickle.dumps(L))
             self.assertEqual(L2, L)
-            self.assertEqual(repr(L2), repr(L))
+            self.assertEqual(L2.maxrank, L.maxrank)
+            self.assertEqual(L2.HNF_policy, L.HNF_policy)
 
     def test_can_construct_huge(self):
         # Can't construct N^2 ~ 800 TB,
         # but can construct N ~ 80 MB
         Lattice(10_000_000, maxrank=3)
+
+    def test_sizeof(self):
+        # The size is:
+        #   some overhead + 4 buffers of N words + (maxrank+1)*N words of data
+
+        # All memory is allocated up front
+        for n in range(10):
+            self.assertEqual(Lattice(n).__sizeof__(), Lattice.full(n).__sizeof__())
+
+        # Maxrank=N --> Quadratic growth
+        sizes = [Lattice(n).__sizeof__() for n in range(10)]
+        diffs = [b-a for a, b in zip(sizes, sizes[1:])]
+        diffdiffs = [b-a for a, b in zip(diffs, diffs[1:])]
+        self.assertIn(diffdiffs, ([2*8]*(10-2), [2*4]*(10-2))) # 2 words per N per N
+
+        # Bounded rank --> Linear growth in N
+        sizes = [Lattice(n, maxrank=10).__sizeof__() for n in range(10, 20)]
+        diffs = [b-a for a, b in zip(sizes, sizes[1:])]
+        self.assertIn(diffs, ([8*(4+11)]*(10-1), [4*(4+11)]*(10-1)))
+
+        # Bounded N --> Linear growth in rank
+        sizes = [Lattice(20, maxrank=n).__sizeof__() for n in range(10)]
+        diffs = [b-a for a, b in zip(sizes, sizes[1:])]
+        self.assertIn(diffs, ([8*20]*(10-1), [4*20]*(10-1)))
+
+    def test_coefficients_of(self):
+        self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).coefficients_of(Vector([2, 20])), Vector([1, 10]))
+        self.assertEqual(Lattice(2, [[2, 0]]).coefficients_of(Vector([-2, 0])), Vector([-1]))
+        self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).coefficients_of(Vector([30, -10, -10])), Vector([3, -2]))
+
+    def test_linear_combination(self):
+        self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).linear_combination(Vector([1, 10])), Vector([2, 20]))
+        self.assertEqual(Lattice(2, [[2, 0]]).linear_combination(Vector([-1])), Vector([-2, 0]))
+        self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).linear_combination(Vector([3, -2])), Vector([30, -10, -10]))
+
 
 if __name__ == "__main__":
     unittest.main(exit=False)
