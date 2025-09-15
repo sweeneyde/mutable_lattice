@@ -878,5 +878,10 @@ class TestLatticeAPI(unittest.TestCase):
             self.assertEqual(L2, L)
             self.assertEqual(repr(L2), repr(L))
 
+    def test_can_construct_huge(self):
+        # Can't construct N^2 ~ 800 TB,
+        # but can construct N ~ 80 MB
+        Lattice(10_000_000, maxrank=3)
+
 if __name__ == "__main__":
     unittest.main(exit=False)

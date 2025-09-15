@@ -1733,7 +1733,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
     // + N words for the basis
     // + N*(maxrank+1) words for the buffers
     // == N*(maxrank+5)
-    assert(maxrank >= 0);
+    assert(0 <= maxrank && maxrank <= N);
     if (N && maxrank > PY_SSIZE_T_MAX/N - 5) {
         PyErr_SetString(PyExc_OverflowError, "Lattice was too big to construct");
         return NULL;
