@@ -354,7 +354,7 @@ class LatticeTests:
                 self.assertEqual(L._get_row_to_pivot(), PyL.pivot_location_in_row)
                 self.assertEqual(L._get_zero_columns(), PyL.zero_columns)
 
-                L_basis = list(map(Vector.tolist, L.get_basis()))
+                L_basis = L.tolist()
                 for vec in L_basis:
                     self.assertIn(vec, PyL)
                 for v in PyL.basis:
@@ -395,13 +395,24 @@ class LatticeTests:
                         "[0 1 0 1]\n"
                         "[0 0 2 2]")
 
+    def test_constructor_with_data(self):
+        self.assertEqual(Lattice(0, [], HNF_policy=self.HNF_POLICY).tolist(), [])
+        self.assertEqual(Lattice(1, [], HNF_policy=self.HNF_POLICY).tolist(), [])
+        self.assertEqual(Lattice(1, [[0]], HNF_policy=self.HNF_POLICY).tolist(), [])
+        self.assertEqual(Lattice(1, [[1]], HNF_policy=self.HNF_POLICY).tolist(), [[1]])
+        self.assertEqual(Lattice(1, [[2]], HNF_policy=self.HNF_POLICY).tolist(), [[2]])
+        self.assertEqual(Lattice(2, [], HNF_policy=self.HNF_POLICY).tolist(), [])
+        self.assertEqual(Lattice(2, [[0, 0]], HNF_policy=self.HNF_POLICY).tolist(), [])
+        self.assertEqual(Lattice(2, [[1, 5]], HNF_policy=self.HNF_POLICY).tolist(), [[1, 5]])
+        self.assertEqual(Lattice(2, [[1, 0], [0, 5]], HNF_policy=self.HNF_POLICY).tolist(), [[1, 0], [0, 5]])
+        self.assertEqual(Lattice(2, [[2, 0], [0, 2], [-100, -200]], HNF_policy=self.HNF_POLICY).tolist(), [[2, 0], [0, 2]])
+
     def test_hnf(self):
         L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 3]))
         L.add_vector(Vector([0, 2]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 1],
              [0, 2]]
         )
@@ -410,8 +421,7 @@ class LatticeTests:
         L.add_vector(Vector([5, -10]))
         L.add_vector(Vector([0, -1]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[5, 0],
              [0, 1]]
         )
@@ -420,8 +430,7 @@ class LatticeTests:
         L.add_vector(Vector([1, 3]))
         L.add_vector(Vector([0, 1]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 0],
              [0, 1]]
         )
@@ -432,8 +441,7 @@ class LatticeTests:
         L.add_vector(Vector([-3, -1]))
         L.add_vector(Vector([-2, -1]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 0],
              [0, 1]]
         )
@@ -444,11 +452,10 @@ class LatticeTests:
         L.add_vector(Vector([5, 6, 1, 6]))
         L.add_vector(Vector([8, 3, 1, 1]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 0, 50, -11],
-            [0, 3, 28, -2],
-            [0, 0, 61, -13]]
+             [0, 3, 28, -2],
+             [0, 0, 61, -13]]
         )
 
         L = Lattice(4, HNF_policy=self.HNF_POLICY)
@@ -456,12 +463,11 @@ class LatticeTests:
         L.add_vector(Vector([0, 1, 0, 0]))
         L.add_vector(Vector([0, 0, 19, 1]))
         L.add_vector(Vector([0, 0, 0, 3]))
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[3, 0,  1, 1],
-            [0, 1,  0, 0],
-            [0, 0, 19, 1],
-            [0, 0,  0, 3]]
+             [0, 1,  0, 0],
+             [0, 0, 19, 1],
+             [0, 0,  0, 3]]
         )
 
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
@@ -469,8 +475,7 @@ class LatticeTests:
         for k in range(0, 25, 5):
             L.add_vector(Vector(list(range(k, k+5))))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[   5,   0,  -5, -10, -15],
              [   0,   1,   2,   3,   4]],
         )
@@ -482,8 +487,7 @@ class LatticeTests:
         L.add_vector(Vector([10, 11, 12]))
         L.add_vector(Vector([13, 14, 15]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 2, 3],
             [0, 3, 6]],
         )
@@ -493,31 +497,30 @@ class LatticeTests:
         L.add_vector(Vector([0, 0, 0]))
         L.add_vector(Vector([0, 0, 0]))
         L.HNFify()
-        self.assertEqual(L.get_basis(), [])
+        self.assertEqual(L.tolist(), [])
 
         L = Lattice(1, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0]))
         L.add_vector(Vector([0]))
         L.add_vector(Vector([0]))
         L.HNFify()
-        self.assertEqual(L.get_basis(), [])
+        self.assertEqual(L.tolist(), [])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 0, 0]))
         L.HNFify()
-        self.assertEqual(L.get_basis(), [])
+        self.assertEqual(L.tolist(), [])
 
         L = Lattice(0, HNF_policy=self.HNF_POLICY)
         L.HNFify()
-        self.assertEqual(L.get_basis(), [])
+        self.assertEqual(L.tolist(), [])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 2, 3]))
         L.add_vector(Vector([4, 5, 6]))
         L.add_vector(Vector([7, 8, 9]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 2, 3],
              [0, 3, 6]],
         )
@@ -527,8 +530,7 @@ class LatticeTests:
         L.add_vector(Vector([4, 5, 6]))
         L.add_vector(Vector([7, 8, 9]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 0, 0],
              [0, 1, 0],
              [0, 0, 3]],
@@ -540,8 +542,7 @@ class LatticeTests:
         L.add_vector(Vector([0, 1, 2]))
         L.add_vector(Vector([0,-2, 5]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[0, 1, 2],
              [0, 0, 3]],
         )
@@ -555,8 +556,7 @@ class LatticeTests:
         for i in range(10):
             L.add_vector(Vector([0]*i + [200] + [0]*(9-i)))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[  1,   0,   2,   0,  13,   5,   1, 166,  72,  69],
              [  0,   1,   1,   0,  20,   4,  15, 195,  65, 190],
              [  0,   0,   4,   0,  24,   5,  23,  22,  51, 123],
@@ -576,8 +576,7 @@ class LatticeTests:
         L.add_vector(Vector([0,   78, 8074]))
         L.add_vector(Vector([0,    0,   32]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[5,  2,  7],
              [0, 78, 10],
              [0,  0, 32]]
@@ -589,8 +588,7 @@ class LatticeTests:
         L.add_vector(Vector([0,     0,     9,  43651]))
         L.add_vector(Vector([0,     0,     0,     77]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[8, 0, 1, 51],
              [0, 1, 2, 20],
              [0, 0, 9, 69],
@@ -605,8 +603,7 @@ class LatticeTests:
         L.add_vector(Vector([ 7, -5, -8,  4,  3, -4]))
         L.add_vector(Vector([ 1, -1,  6,  0,  8, -3]))
         L.HNFify()
-        self.assertEqual(
-            [vec.tolist() for vec in L.get_basis()],
+        self.assertEqual(L.tolist(),
             [[1, 0, 3, 237, -299,  90],
              [0, 1, 1, 103, -130,  40],
              [0, 0, 4, 352, -450, 135],
@@ -631,7 +628,7 @@ class LatticeTests:
                     for v2 in L2.get_basis():
                         self.assertIn(v2, L)
                     L2._assert_consistent()
-                    basis = [vec.tolist() for vec in L2.get_basis()]
+                    basis = L2.tolist()
                     row_to_pivot = L2._get_row_to_pivot()
                     for i, j in enumerate(row_to_pivot):
                         pivot = basis[i][j]
@@ -816,7 +813,36 @@ class TestLatticeAPI(unittest.TestCase):
         Lattice.full(1)._assert_consistent()
         Lattice.full(2)._assert_consistent()
         Lattice.full(3)._assert_consistent()
+        self.assertEqual(Lattice.full(3).tolist(), [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
+    def test_tolist(self):
+        L = Lattice(3)
+        L.add_vector(Vector([1,0,0]))
+        L.add_vector(Vector([0,2,3]))
+        self.assertEqual(L.tolist(), [[1,0,0],[0,2,3]])
+
+    def test_get_basis(self):
+        vecs = [Vector([1,0,0]),
+                Vector([0,2,3])]
+        L = Lattice(3)
+        for vec in vecs:
+            L.add_vector(vec)
+        self.assertEqual(L.get_basis(), vecs)
+
+    def test_repr_eval(self):
+        for expr in [
+            "Lattice(0)",
+            "Lattice(10)",
+            "Lattice(10, maxrank=5)",
+            "Lattice(10, HNF_policy=0)",
+            "Lattice(10, maxrank=4, HNF_policy=0)",
+            "Lattice(3, [[1, 2, 3]])",
+            "Lattice(3, [[1, 2, 3], [0, 0, 5]])",
+            "Lattice(3, [[1, 2, 3], [0, 3, 1], [0, 0, 5]])",
+            "Lattice(3, [[1, 2, 3], [0, 1, 0], [0, 0, 1]], HNF_policy=0)",
+            "Lattice(3, [[1, 2, 3], [0, 0, 1]], maxrank=2, HNF_policy=0)",
+        ]:
+            self.assertEqual(repr(eval(expr)), expr)
 
 if __name__ == "__main__":
     unittest.main(exit=False)

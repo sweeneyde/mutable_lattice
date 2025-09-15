@@ -587,7 +587,35 @@ Vector_zero(PyTypeObject *type, PyObject *n_obj)
 }
 
 static PyObject *
-Vector_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+Vector_new_impl(PyObject *data)
+{
+    if (!PyList_Check(data)) {
+        PyErr_SetString(PyExc_TypeError, "Vector() argument must be list");
+        return NULL;
+    }
+    Py_ssize_t N = PyList_GET_SIZE(data);
+    PyObject *self = PyType_GenericAlloc(&Vector_Type, N);
+    if (self == NULL) {
+        return NULL;
+    }
+    TagInt *self_vec = Vector_get_vec(self);
+    for (Py_ssize_t i = 0; i < N && i < PyList_GET_SIZE(data); i++) {
+        PyObject *x = PyList_GET_ITEM(data, i);
+        if (!PyLong_CheckExact(x)) {
+            Py_DECREF(self);
+            PyErr_SetString(PyExc_TypeError, "Vector() argument must be a list of int");
+            return NULL;
+        }
+        if (object_to_TagInt_steal(Py_NewRef(x), &self_vec[i])) {
+            Py_DECREF(self);
+            return NULL;
+        }
+    }
+    return self;
+}
+
+static PyObject *
+Vector_new(PyTypeObject *Py_UNUSED(type), PyObject *args, PyObject *kwds)
 {
     if (kwds != NULL && PyDict_GET_SIZE(kwds) > 0) {
         PyErr_SetString(PyExc_TypeError, "Vector() takes no keyword arguments.");
@@ -598,29 +626,7 @@ Vector_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         return NULL;
     }
     PyObject *data = PyTuple_GET_ITEM(args, 0);
-    if (PyList_Check(data)) {
-        Py_ssize_t n = PyList_GET_SIZE(data);
-        PyObject *self = type->tp_alloc(type, n);
-        if (self == NULL) {
-            return NULL;
-        }
-        TagInt *self_vec = Vector_get_vec(self);
-        for (Py_ssize_t i = 0; i < n && i < PyList_GET_SIZE(data); i++) {
-            PyObject *x = PyList_GET_ITEM(data, i);
-            if (!PyLong_CheckExact(x)) {
-                Py_DECREF(self);
-                PyErr_SetString(PyExc_TypeError, "Vector() argument must be a list of int");
-                return NULL;
-            }
-            if (object_to_TagInt_steal(Py_NewRef(x), &self_vec[i])) {
-                Py_DECREF(self);
-                return NULL;
-            }
-        }
-        return self;
-    }
-    PyErr_SetString(PyExc_TypeError, "Vector() argument must be list");
-    return NULL;
+    return Vector_new_impl(data);
 }
 
 static PyObject *
@@ -831,14 +837,14 @@ Vector_negative(PyObject *self)
 }
 
 static PyObject *
-Vector_tolist(PyObject *self, PyObject *Py_UNUSED(ignored)) {
-    PyObject *result = PyList_New(Py_SIZE(self));
+Vector_tolist_impl(TagInt *vec, Py_ssize_t N)
+{
+    PyObject *result = PyList_New(N);
     if (result == NULL) {
         return NULL;
     }
-    TagInt *self_vec = Vector_get_vec(self);
-    for (Py_ssize_t i = 0; i < Py_SIZE(self); i++) {
-        PyObject *obj = TagInt_to_object(self_vec[i]);
+    for (Py_ssize_t i = 0; i < N; i++) {
+        PyObject *obj = TagInt_to_object(vec[i]);
         if (obj == NULL) {
             Py_DECREF(result);
             return NULL;
@@ -846,6 +852,11 @@ Vector_tolist(PyObject *self, PyObject *Py_UNUSED(ignored)) {
         PyList_SET_ITEM(result, i, obj);
     }
     return result;
+}
+
+static PyObject *
+Vector_tolist(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+    return Vector_tolist_impl(Vector_get_vec(self), Py_SIZE(self));
 }
 
 static PyObject *
@@ -1477,7 +1488,7 @@ typedef struct {
     // The data hangs off the end of this struct.
     // Format:
     //    * The struct members leading up to L.basis
-    //    *  (so we can shuffle rows around)
+    //    * Then L.basis[N] (so we can shuffle rows around)
     //    * then space for 3*N*Py_ssize_t arrays above
     //    * then space for (maxrank+1)*N TagInts, pointed to by the above.
     // Technically we don't need to store all of the pointers above
@@ -1727,7 +1738,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
         PyErr_SetString(PyExc_OverflowError, "Lattice was too big to construct");
         return NULL;
     }
-    Lattice *L = (Lattice *)type->tp_alloc(type, N*(maxrank+5));
+    Lattice *L = (Lattice *)PyType_GenericAlloc(type, N*(maxrank+5));
     if (!L) {
         return NULL;
     }
@@ -1758,12 +1769,16 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
 }
 
 static PyObject *
+Lattice_add_vector(PyObject *self, PyObject *other);
+
+static PyObject *
 Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
-    static char *kwlist[] = {"", "HNF_policy", "maxrank", NULL};
+    static char *kwlist[] = {"", "", "HNF_policy", "maxrank", NULL};
     Py_ssize_t N;
+    PyObject *data = NULL;
     Py_ssize_t maxrank = -1;
     int HNF_policy = 1;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "n|$in", kwlist, &N, &HNF_policy, &maxrank)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "n|O$in", kwlist, &N, &data, &HNF_policy, &maxrank)) {
         return NULL;
     }
     if (N < 0) {
@@ -1781,7 +1796,27 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
     if (maxrank == -1 || maxrank > N) {
         maxrank = N;
     }
-    return Lattice_new_impl(type, N, HNF_policy, maxrank);
+    PyObject *result = Lattice_new_impl(type, N, HNF_policy, maxrank);
+    if (result == NULL) {
+        return NULL;
+    }
+    if (data == NULL) {
+        return result;
+    }
+    if (!PyList_Check(data)) {
+        PyErr_SetString(PyExc_TypeError, "Lattice(N, data) second argument must be list");
+        Py_DECREF(result);
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(data); i++) {
+        PyObject *none = Lattice_add_vector(result, PyList_GET_ITEM(data, i));
+        if (none == NULL) {
+            Py_DECREF(result);
+            return NULL;
+        }
+        Py_DECREF(none);
+    }
+    return result;
 }
 
 static PyObject *
@@ -2290,19 +2325,30 @@ Lattice_add_vector(PyObject *self, PyObject *other)
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (Py_TYPE(other) != &Vector_Type) {
-        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument should be Vector");
-        return NULL;
-    }
-    if (Py_SIZE(other) != L->N) {
-        PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.add_vector");
-        return NULL;
-    }
     if (L->errored) {
         PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
         return NULL;
     }
-    if (Lattice_add_vector_impl((Lattice *)self, Vector_get_vec(other))) {
+    PyObject *v;
+    if (Py_TYPE(other) == &Vector_Type) {
+        v = Py_NewRef(other);
+    }
+    else if (Py_TYPE(other) == &PyList_Type) {
+        v = Vector_new_impl(other);
+        if (v == NULL) {
+            return NULL;
+        }
+    }
+    else {
+        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument should be Vector or list");
+        return NULL;
+    }
+    if (Py_SIZE(v) != L->N) {
+        PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.add_vector");
+        Py_DECREF(v);
+        return NULL;
+    }
+    if (Lattice_add_vector_impl(L, Vector_get_vec(v))) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -2321,6 +2367,28 @@ Lattice_get_basis(PyObject *self, PyObject *Py_UNUSED(ignored))
     }
     for (Py_ssize_t i = 0; i < R; i++) {
         PyObject *v = Vector_from_TagInts(L->basis[i], N);
+        if (v == NULL) {
+            Py_DECREF(result);
+            return NULL;
+        }
+        PyList_SET_ITEM(result, i, v);
+    }
+    return result;
+}
+
+static PyObject *
+Lattice_tolist(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    assert(Py_TYPE(self) == &Lattice_Type);
+    Lattice *L = (Lattice *)self;
+    Py_ssize_t N = L->N;
+    Py_ssize_t R = L->rank;
+    PyObject *result = PyList_New(R);
+    if (result == NULL) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        PyObject *v = Vector_tolist_impl(L->basis[i], N);
         if (v == NULL) {
             Py_DECREF(result);
             return NULL;
@@ -2846,6 +2914,60 @@ error:
 }
 
 static PyObject *
+Lattice_repr(PyObject *self)
+{
+    Lattice *L = (Lattice *)self;
+    PyObject *result = NULL, *empty=NULL, *start=NULL, *close=NULL;
+    PyObject *N_obj=NULL, *N_str=NULL, *HNF_policy0=NULL;
+    PyObject *maxrankeq_str=NULL, *maxrank_obj=NULL, *maxrank_str=NULL;
+    PyObject *commaspace=NULL, *tolist=NULL, *tolist_str=NULL;
+    if (!(empty = PyUnicode_FromStringAndSize("", 0))) { goto error; }
+    if (!(close = PyUnicode_FromStringAndSize(")", 1))) { goto error; }
+    if (!(start = PyUnicode_FromStringAndSize("Lattice(", 8))) { goto error; }
+    if (!(N_obj = PyLong_FromSsize_t(L->N))) { goto error; }
+    if (!(N_str = pylong_repr(N_obj))) { goto error; }
+    if (L->HNF_policy == 0) {
+        if (!(HNF_policy0 = PyUnicode_FromStringAndSize(", HNF_policy=0", 14))) { goto error; }
+    }
+    else {
+        HNF_policy0 = Py_NewRef(empty);
+    }
+    if (L->maxrank != L->N) {
+        if (!(maxrankeq_str = PyUnicode_FromStringAndSize(", maxrank=", 10))) { goto error; }
+        if (!(maxrank_obj = PyLong_FromSsize_t(L->maxrank))) { goto error; }
+        if (!(maxrank_str = pylong_repr(maxrank_obj))) { goto error; }
+    }
+    else {
+        maxrankeq_str = Py_NewRef(empty);
+        maxrank_str = Py_NewRef(empty);
+    }
+    if (L->rank) {
+        if (!(commaspace = PyUnicode_FromStringAndSize(", ", 2))) { goto error; }
+        if (!(tolist = Lattice_tolist(self, NULL))) { goto error; }
+        if (!(tolist_str = PyObject_Repr(tolist))) { goto error; }
+    }
+    else {
+        commaspace = Py_NewRef(empty);
+        tolist_str = Py_NewRef(empty);
+    }
+    PyObject *parts = PyTuple_Pack(8, start, N_str,
+                                      commaspace, tolist_str,
+                                      maxrankeq_str, maxrank_str,
+                                      HNF_policy0, close);
+    if (parts == NULL) {
+        goto error;
+    }
+    result = PyUnicode_Join(empty, parts);
+    Py_DECREF(parts);
+error:
+    Py_XDECREF(empty); Py_XDECREF(start); Py_XDECREF(close);
+    Py_XDECREF(N_obj); Py_XDECREF(N_str); Py_XDECREF(HNF_policy0);
+    Py_XDECREF(maxrankeq_str); Py_XDECREF(maxrank_obj); Py_XDECREF(maxrank_str);
+    Py_XDECREF(commaspace); Py_XDECREF(tolist); Py_XDECREF(tolist_str);
+    return result;
+}
+
+static PyObject *
 Lattice_str(PyObject *self) {
     Lattice *L = (Lattice *)self;
     Py_ssize_t R = L->rank, N = L->N;
@@ -2931,6 +3053,8 @@ static PyMethodDef Lattice_methods[] = {
      "L.add_vector(v) adds the vector v to the Lattice L"},
     {"get_basis", Lattice_get_basis, METH_NOARGS,
      "L.get_basis() returns a list of basis vectors for L"},
+    {"tolist", Lattice_tolist, METH_NOARGS,
+     "L.tolist() returns a python list of list of int representing the basis of this lattice."},
     {"_get_zero_columns", Lattice_get_zero_columns, METH_NOARGS,
      "L._get_zero_columns() returns a list of the indices of the zero columns of the lattice L."},
     {"_get_row_to_pivot", Lattice_get_row_to_pivot, METH_NOARGS,
@@ -2985,6 +3109,7 @@ static PyTypeObject Lattice_Type = {
     .tp_as_number = &Lattice_as_number,
     .tp_richcompare = Lattice_richcompare,
     .tp_str = Lattice_str,
+    .tp_repr = Lattice_repr,
 };
 
 
