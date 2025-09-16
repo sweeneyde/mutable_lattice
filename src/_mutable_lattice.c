@@ -1809,8 +1809,8 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
     return (PyObject *)L;
 }
 
-static PyObject *
-Lattice_add_vector(PyObject *self, PyObject *other);
+static bool
+Lattice_add_vector_or_list_impl(PyObject *self, PyObject *other);
 
 static PyObject *
 Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
@@ -1851,12 +1851,10 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         return NULL;
     }
     for (Py_ssize_t i = 0; i < PyList_GET_SIZE(data); i++) {
-        PyObject *none = Lattice_add_vector(result, PyList_GET_ITEM(data, i));
-        if (none == NULL) {
+        if (Lattice_add_vector_or_list_impl(result, PyList_GET_ITEM(data, i))) {
             Py_DECREF(result);
             return NULL;
         }
-        Py_DECREF(none);
     }
     return result;
 }
@@ -2177,9 +2175,11 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
     // Already cleared out the pushed vector
     return result;
 error:
+    Py_DECREF(result);
     Lattice_pop_vector(L, 0);
     return NULL;
 not_present:
+    Py_DECREF(result);
     Lattice_pop_vector(L, 0);
     PyErr_SetString(PyExc_KeyError, "Vector not present in Lattice");
     return NULL;
@@ -2528,29 +2528,43 @@ Lattice_add_vector(PyObject *self, PyObject *other)
         err_corrupted();
         return NULL;
     }
-    PyObject *v;
-    if (Py_TYPE(other) == &Vector_Type) {
-        v = Py_NewRef(other);
-    }
-    else if (Py_TYPE(other) == &PyList_Type) {
-        v = Vector_new_impl(other);
-        if (v == NULL) {
-            return NULL;
-        }
-    }
-    else {
-        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument should be Vector or list");
+    if (Py_TYPE(other) != &Vector_Type) {
+        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument should be Vector");
         return NULL;
     }
-    if (Py_SIZE(v) != L->N) {
+    if (Py_SIZE(other) != L->N) {
         PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.add_vector");
-        Py_DECREF(v);
         return NULL;
     }
-    if (Lattice_add_vector_impl(L, Vector_get_vec(v))) {
+    if (Lattice_add_vector_impl(L, Vector_get_vec(other))) {
         return NULL;
     }
     Py_RETURN_NONE;
+}
+
+static bool
+Lattice_add_vector_or_list_impl(PyObject *self, PyObject *other)
+{
+    if (Py_TYPE(other) == &PyList_Type) {
+        other = Vector_new_impl(other);
+        if (other == NULL) {
+            return true;
+        }
+    }
+    else if (Py_TYPE(other) == &Vector_Type) {
+        Py_INCREF(other);
+    }
+    else {
+        PyErr_SetString(PyExc_TypeError, "Lattice data entries must be list or Vector");
+        return true;
+    }
+    PyObject *res = Lattice_add_vector(self, other);
+    Py_DECREF(other);
+    if (res == NULL) {
+        return true;
+    }
+    Py_DECREF(res);
+    return false;
 }
 
 static PyObject *
@@ -3057,6 +3071,7 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
     assert(result_index == PyList_GET_SIZE(result));
     PyMem_Free(delete_row);
     PyMem_Free(delete_col);
+    PyMem_Free(scratch);
     Py_DECREF(L);
     return result;
 error:
@@ -3064,6 +3079,7 @@ error:
     Py_XDECREF(result);
     PyMem_Free(delete_row);
     PyMem_Free(delete_col);
+    PyMem_Free(scratch);
     return NULL;
 }
 

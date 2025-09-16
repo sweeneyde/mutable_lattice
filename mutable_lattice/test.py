@@ -296,7 +296,7 @@ class LatticeTests:
     def test_add_vector(self):
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 0, 0]))
-        L.add_vector([0, 2, 0])
+        L.add_vector(Vector([0, 2, 0]))
         L.add_vector(Vector([0, 0, 3]))
         self.assertEqual(L.tolist(), [[1, 0, 0], [0, 2, 0], [0, 0, 3]])
 
@@ -305,7 +305,7 @@ class LatticeTests:
         with self.assertRaises(TypeError): L.add_vector(None)
         with self.assertRaises(TypeError): L.add_vector([None])
         with self.assertRaises(TypeError): L.add_vector((1,2,3))
-        with self.assertRaises(ValueError): L.add_vector([1, 2, 3, 4])
+        with self.assertRaises(TypeError): L.add_vector([1, 2, 3])
         with self.assertRaises(ValueError): L.add_vector(Vector([1, 2, 3, 4]))
 
     def test_random(self):
@@ -1001,7 +1001,6 @@ class TestLatticeAPI(unittest.TestCase):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).linear_combination(Vector([1, 10])), Vector([2, 20]))
         self.assertEqual(Lattice(2, [[2, 0]]).linear_combination(Vector([-1])), Vector([-2, 0]))
         self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).linear_combination(Vector([3, -2])), Vector([30, -10, -10]))
-
 
 if __name__ == "__main__":
     unittest.main(exit=False)
