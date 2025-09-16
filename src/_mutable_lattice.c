@@ -3086,14 +3086,19 @@ Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
     if (!(zero = PyLong_FromLong(0))) {
         goto error;
     }
-    if (PyList_Sort(result) < 0) {
-        goto error;
-    }
-    while (true) {
-        bool did_mingle = false;
-        for (Py_ssize_t i = 1; i < PyList_GET_SIZE(result); i++) {
-            PyObject *a = PyList_GET_ITEM(result, i - 1);
-            PyObject *b = PyList_GET_ITEM(result, i);
+    // "comb sort" but instead of swapping,
+    // replace [a, b] with [gcd(a, b), lcm(a, b)]
+    Py_ssize_t gap = PyList_GET_SIZE(result);
+    bool sorted = false;
+    while (!sorted) {
+        gap = (Py_ssize_t) ((float)gap / 1.3);
+        if (gap <= 1) {
+            gap = 1;
+            sorted = true;
+        }
+        for (Py_ssize_t i = 0; i + gap < PyList_GET_SIZE(result); i++) {
+            PyObject *a = PyList_GET_ITEM(result, i);
+            PyObject *b = PyList_GET_ITEM(result, i + gap);
             PyObject *r = pylong_remainder(b, a);
             bool need_to_mingle = pylong_bool(r);
             Py_DECREF(r);
@@ -3105,22 +3110,19 @@ Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
                 goto error;
             }
             PyObject *a_div_g = pylong_floor_divide(a, g);
-            PyList_SET_ITEM(result, i - 1, g);
+            PyList_SET_ITEM(result, i, g);
             Py_DECREF(a);
             if (a_div_g == NULL) {
                 goto error;
             }
             PyObject *lcm = pylong_multiply(a_div_g, b);
-            PyList_SET_ITEM(result, i, lcm);
+            PyList_SET_ITEM(result, i + gap, lcm);
             Py_DECREF(b);
             Py_DECREF(a_div_g);
             if (lcm == NULL) {
                 goto error;
             }
-            did_mingle = true;
-        }
-        if (!did_mingle) {
-            break;
+            sorted = false;
         }
     }
     Py_ssize_t N = ((Lattice *)self)->N;
