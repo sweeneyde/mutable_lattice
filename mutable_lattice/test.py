@@ -425,7 +425,7 @@ class LatticeTests:
 
     def test_str(self):
         L = Lattice(4, HNF_policy=self.HNF_POLICY)
-        self.assertEqual(str(L), "<zero lattice in Z^4>")
+        self.assertEqual(str(L), "<zero Lattice in Z^4>")
         L.add_vector(Vector([0, 1, 0, 1]))
         L.add_vector(Vector([0, 0, 2, 2]))
         self.assertEqual(str(L), 
@@ -979,18 +979,18 @@ class TestLatticeAPI(unittest.TestCase):
         # Maxrank=N --> Quadratic growth
         sizes = [Lattice(n).__sizeof__() for n in range(10)]
         diffs = [b-a for a, b in zip(sizes, sizes[1:])]
-        diffdiffs = [b-a for a, b in zip(diffs, diffs[1:])]
-        self.assertIn(diffdiffs, ([2*8]*(10-2), [2*4]*(10-2))) # 2 words per N per N
+        diffdiffs = {b-a for a, b in zip(diffs, diffs[1:])}
+        self.assertIn(diffdiffs, ({2*8}, {2*4})) # 2 words per N per N
 
         # Bounded rank --> Linear growth in N
         sizes = [Lattice(n, maxrank=10).__sizeof__() for n in range(10, 20)]
-        diffs = [b-a for a, b in zip(sizes, sizes[1:])]
-        self.assertIn(diffs, ([8*(4+11)]*(10-1), [4*(4+11)]*(10-1)))
+        diffs = {b-a for a, b in zip(sizes, sizes[1:])}
+        self.assertIn(diffs, ({8*(4+11)}, {4*(4+11)}))
 
         # Bounded N --> Linear growth in rank
         sizes = [Lattice(20, maxrank=n).__sizeof__() for n in range(10)]
-        diffs = [b-a for a, b in zip(sizes, sizes[1:])]
-        self.assertIn(diffs, ([8*20]*(10-1), [4*20]*(10-1)))
+        diffs = {b-a for a, b in zip(sizes, sizes[1:])}
+        self.assertIn(diffs, ({8*20}, {4*20}))
 
     def test_coefficients_of(self):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).coefficients_of(Vector([2, 20])), Vector([1, 10]))
