@@ -2076,7 +2076,7 @@ Lattice_contains(PyObject *self, PyObject *other)
     assert(Py_TYPE(self) == &Lattice_Type);
     if (((Lattice *)self)->errored) {
         PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
-        return NULL;
+        return -1;
     }
     if (Py_TYPE(other) != &Vector_Type) {
         PyErr_SetString(PyExc_TypeError, "Lattice.__contains__ argument should be Vector");
@@ -3138,55 +3138,32 @@ Lattice_repr(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
     if (L->errored) {
-        return PyUnicde_FromString("<corrupted Lattice>");
+        return PyUnicode_FromString("<corrupted Lattice>");
     }
-    PyObject *result = NULL, *empty=NULL, *start=NULL, *close=NULL;
-    PyObject *N_obj=NULL, *N_str=NULL, *HNF_policy0=NULL;
-    PyObject *maxrankeq_str=NULL, *maxrank_obj=NULL, *maxrank_str=NULL;
-    PyObject *commaspace=NULL, *tolist=NULL, *tolist_str=NULL;
-    if (!(empty = PyUnicode_FromStringAndSize("", 0))) { goto error; }
-    if (!(close = PyUnicode_FromStringAndSize(")", 1))) { goto error; }
-    if (!(start = PyUnicode_FromStringAndSize("Lattice(", 8))) { goto error; }
-    if (!(N_obj = PyLong_FromSsize_t(L->N))) { goto error; }
-    if (!(N_str = pylong_repr(N_obj))) { goto error; }
-    if (L->HNF_policy == 0) {
-        if (!(HNF_policy0 = PyUnicode_FromStringAndSize(", HNF_policy=0", 14))) { goto error; }
-    }
-    else {
-        HNF_policy0 = Py_NewRef(empty);
-    }
+    PyObject *result = NULL;
+    PyObject *maxrank_str = NULL;
+    PyObject *tolist=NULL, *tolist_str=NULL;
     if (L->maxrank != L->N) {
-        if (!(maxrankeq_str = PyUnicode_FromStringAndSize(", maxrank=", 10))) { goto error; }
-        if (!(maxrank_obj = PyLong_FromSsize_t(L->maxrank))) { goto error; }
-        if (!(maxrank_str = pylong_repr(maxrank_obj))) { goto error; }
+        if (!(maxrank_str = PyUnicode_FromFormat(", maxrank=%zd", L->maxrank))) { goto error; }
     }
     else {
-        maxrankeq_str = Py_NewRef(empty);
-        maxrank_str = Py_NewRef(empty);
+        if (!(maxrank_str = PyUnicode_FromStringAndSize("", 0))) { goto error; }
     }
     if (L->rank) {
-        if (!(commaspace = PyUnicode_FromStringAndSize(", ", 2))) { goto error; }
         if (!(tolist = Lattice_tolist(self, NULL))) { goto error; }
-        if (!(tolist_str = PyObject_Repr(tolist))) { goto error; }
+        if (!(tolist_str = PyUnicode_FromFormat(", %R", tolist))) { goto error; }
     }
     else {
-        commaspace = Py_NewRef(empty);
-        tolist_str = Py_NewRef(empty);
+        if (!(tolist_str = PyUnicode_FromStringAndSize("", 0))) { goto error; }
     }
-    PyObject *parts = PyTuple_Pack(8, start, N_str,
-                                      commaspace, tolist_str,
-                                      maxrankeq_str, maxrank_str,
-                                      HNF_policy0, close);
-    if (parts == NULL) {
-        goto error;
-    }
-    result = PyUnicode_Join(empty, parts);
-    Py_DECREF(parts);
+    result = PyUnicode_FromFormat("Lattice(%zd%U%U%s)",
+        L->N, tolist_str, maxrank_str,
+        L->HNF_policy == 0 ? ", HNF_policy=0" : ""
+    );
 error:
-    Py_XDECREF(empty); Py_XDECREF(start); Py_XDECREF(close);
-    Py_XDECREF(N_obj); Py_XDECREF(N_str); Py_XDECREF(HNF_policy0);
-    Py_XDECREF(maxrankeq_str); Py_XDECREF(maxrank_obj); Py_XDECREF(maxrank_str);
-    Py_XDECREF(commaspace); Py_XDECREF(tolist); Py_XDECREF(tolist_str);
+    Py_XDECREF(maxrank_str);
+    Py_XDECREF(tolist);
+    Py_XDECREF(tolist_str);
     return result;
 }
 
@@ -3195,7 +3172,7 @@ Lattice_str(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
     if (L->errored) {
-        return PyUnicde_FromString("<corrupted Lattice>");
+        return PyUnicode_FromString("<corrupted Lattice>");
     }
     Py_ssize_t R = L->rank, N = L->N;
     if (R == 0) {
