@@ -1480,7 +1480,7 @@ typedef struct {
     Py_ssize_t *col_to_pivot; // length=N. -1 if no pivot
     Py_ssize_t *row_to_pivot; // logical length=rank. Every row has a pivot.
     int HNF_policy; // 0 --> manual, 1 --> after every addition.
-    bool errored; // set to true after an error occurs to avoid inconsistencies.
+    bool corrupted; // set to true after an error occurs to avoid inconsistencies.
     bool is_full; // set to true once we have all of Z^N
     Py_ssize_t first_HNF_row;
     TagInt *buffer_for_tagints; // Space for (N+1)*N TagInts
@@ -1495,6 +1495,12 @@ typedef struct {
     // and could recalculate, but I don't think we'll be starved
     // by this constant space overhead.
 } Lattice;
+
+static void
+err_corrupted()
+{
+    PyErr_SetString(PyExc_RuntimeError, "Using a corrupted Lattice");
+}
 
 static TagInt *
 Lattice_push_vector(Lattice *L, TagInt *vec, Py_ssize_t j0)
@@ -1544,7 +1550,7 @@ Lattice_clear_impl(PyObject *self)
         L->col_to_pivot[i] = -1;
     }
     L->num_zero_columns = N;
-    L->errored = false;
+    L->corrupted = false;
     L->is_full = (N == 0);
     L->first_HNF_row = 0;
 }
@@ -1591,8 +1597,8 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
     assert(L->maxrank <= N);
     TagInt **basis = L->basis;
 
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     {
@@ -1796,7 +1802,7 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
     L->row_to_pivot = row_to_pivot;
     L->col_to_pivot = col_to_pivot;
     L->HNF_policy = HNF_policy;
-    L->errored = false;
+    L->corrupted = false;
     L->is_full = (N == 0);
     L->first_HNF_row = 0;
     L->buffer_for_tagints = buffer_for_tagints;
@@ -1807,7 +1813,8 @@ static PyObject *
 Lattice_add_vector(PyObject *self, PyObject *other);
 
 static PyObject *
-Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
+Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
+{
     static char *kwlist[] = {"", "", "HNF_policy", "maxrank", NULL};
     Py_ssize_t N;
     PyObject *data = NULL;
@@ -1887,11 +1894,12 @@ Lattice_full(PyObject *cls, PyObject *arg)
 }
 
 static PyObject *
-Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Py_ssize_t R = L->rank;
@@ -2074,8 +2082,8 @@ static int
 Lattice_contains(PyObject *self, PyObject *other)
 {
     assert(Py_TYPE(self) == &Lattice_Type);
-    if (((Lattice *)self)->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (((Lattice *)self)->corrupted) {
+        err_corrupted();
         return -1;
     }
     if (Py_TYPE(other) != &Vector_Type) {
@@ -2098,8 +2106,8 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         return NULL;
     }
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Py_ssize_t N = L->N, R = L->rank;
@@ -2181,8 +2189,8 @@ static PyObject *
 Lattice_linear_combination(PyObject *self, PyObject *other)
 {
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Py_ssize_t N = L->N, R = L->rank;
@@ -2490,7 +2498,7 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
         if (i != -1) {
             if (make_entry_zero(vec, L, i, j)) {
                 Lattice_pop_vector(L, j);
-                L->errored = true;
+                L->corrupted = true;
                 return true;
             }
             assert(TagInt_is_zero(vec[j]));
@@ -2498,7 +2506,7 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
         }
         if (L->rank == L->maxrank) {
             PyErr_SetString(PyExc_IndexError, "Lattice rank would exceed maxrank");
-            L->errored = true;
+            L->corrupted = true;
             return true;
         }
         i = Lattice_insert_vector_with_pivot(L, vec, j);
@@ -2516,8 +2524,8 @@ Lattice_add_vector(PyObject *self, PyObject *other)
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     PyObject *v;
@@ -2550,8 +2558,8 @@ Lattice_get_basis(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Py_ssize_t N = L->N;
@@ -2576,8 +2584,8 @@ Lattice_tolist(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Py_ssize_t N = L->N;
@@ -2617,8 +2625,8 @@ Lattice_inplace_add(PyObject *self, PyObject *other)
     }
     Lattice *L_self = (Lattice *)self;
     Lattice *L_other = (Lattice *)other;
-    if (L_self->errored || L_other->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L_self->corrupted || L_other->corrupted) {
+        err_corrupted();
         return NULL;
     }
     if (L_self->N != L_other->N) {
@@ -2643,8 +2651,8 @@ Lattice_add(PyObject *self, PyObject *other)
         PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.__add__");
         return NULL;
     }
-    if (L1->errored || L2->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L1->corrupted || L2->corrupted) {
+        err_corrupted();
         return NULL;
     }
     if (L2->rank > L1->rank) {
@@ -2725,8 +2733,8 @@ Lattice_richcompare(PyObject *a, PyObject *b, int op)
     }
     Lattice *L1 = (Lattice *)a;
     Lattice *L2 = (Lattice *)b;
-    if (L1->errored || L2->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L1->corrupted || L2->corrupted) {
+        err_corrupted();
         return NULL;
     }
     if (L1->N != L2->N) {
@@ -2854,7 +2862,7 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
         return false;
     }
     if (make_pivots_positive(L)) {
-        L->errored = true;
+        L->corrupted = true;
         return true;
     }
     Py_ssize_t R = L->rank;
@@ -2937,7 +2945,7 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
     L->first_HNF_row = first_row_to_fix;
     return false;
 error:
-    L->errored = true;
+    L->corrupted = true;
     return true;
 }
 
@@ -2945,8 +2953,8 @@ static PyObject *
 Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     if (Lattice_HNFify_impl(L, 0)) {
@@ -2960,8 +2968,8 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     // Just find the entries of the diagonal
     // This function doesn't ensure they have all the right divisibility.
-    if (((Lattice *)self)->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (((Lattice *)self)->corrupted) {
+        err_corrupted();
         return NULL;
     }
     Lattice *L = (Lattice *)Lattice_copy(self, NULL);
@@ -3137,7 +3145,7 @@ static PyObject *
 Lattice_repr(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
+    if (L->corrupted) {
         return PyUnicode_FromString("<corrupted Lattice>");
     }
     PyObject *result = NULL;
@@ -3171,26 +3179,13 @@ static PyObject *
 Lattice_str(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
+    if (L->corrupted) {
         return PyUnicode_FromString("<corrupted Lattice>");
     }
     Py_ssize_t R = L->rank, N = L->N;
     if (R == 0) {
-        PyObject *N_obj = PyLong_FromSsize_t(N);
-        if (N_obj == NULL) {
-            return NULL;
-        }
-        PyObject *fmt = PyUnicode_FromStringAndSize("<zero lattice in Z^%d>", 22);
-        if (fmt == NULL){
-            Py_DECREF(N_obj);
-            return NULL;
-        }
-        PyObject *result = PyUnicode_Format(fmt, N_obj);
-        Py_DECREF(N_obj);
-        Py_DECREF(fmt);
-        return result;
+        return PyUnicode_FromFormat("<zero Lattice in Z^%zd>", N);
     }
-
     PyObject *reprs_by_row = PyList_New(R);
     if (reprs_by_row == NULL) {
         return NULL;
@@ -3253,8 +3248,8 @@ Lattice___getnewargs_ex__(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
-    if (L->errored) {
-        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+    if (L->corrupted) {
+        err_corrupted();
         return NULL;
     }
     PyObject *tolist = Lattice_tolist(self, NULL);
