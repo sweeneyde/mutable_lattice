@@ -757,6 +757,49 @@ class TestLatticeHNFPolicy1(LatticeTests, unittest.TestCase):
 
 class TestLatticeAPI(unittest.TestCase):
 
+    def test_ambient_dimension(self):
+        for N in range(5):
+            self.assertEqual(Lattice(N).ambient_dimension, N)
+
+    def test_rank(self):
+        for N in range(5):
+            L = Lattice(N)
+            for R in range(N):
+                self.assertEqual(L.rank, R)
+                L.add_vector(Vector([0]*R + [1] + [0]*(N-1-R)))
+            self.assertEqual(L.rank, N)
+
+    def test_maxrank(self):
+        for N in range(5):
+            for maxrank in range(N+1):
+                self.assertEqual(Lattice(N, maxrank=maxrank).maxrank, maxrank)
+            self.assertEqual(Lattice(N).maxrank, N)
+            self.assertEqual(Lattice(N, maxrank=-1).maxrank, N)
+            self.assertEqual(Lattice(N, maxrank=maxrank+5).maxrank, N)
+
+    def test_HNF_policy(self):
+        self.assertEqual(Lattice(10, HNF_policy=0).HNF_policy, 0)
+        self.assertEqual(Lattice(10, HNF_policy=1).HNF_policy, 1)
+        self.assertEqual(Lattice(10).HNF_policy, 1)
+
+    def test__first_HNF_row(self):
+        L = Lattice(3, [[1, 0, 0], [0, 0, 1]], HNF_policy=0)
+        L.HNFify()
+        self.assertEqual(L._first_HNF_row, 0)
+        L.add_vector(Vector([0, 2, 2]))
+        self.assertEqual(L._first_HNF_row, 2)
+        self.assertEqual(L.tolist(), [[1, 0, 0], [0, 2, 2], [0, 0, 1]])
+        L.HNFify()
+        self.assertEqual(L._first_HNF_row, 0)
+        self.assertEqual(L.tolist(), [[1, 0, 0], [0, 2, 0], [0, 0, 1]])
+
+    def test_copy(self):
+        L = Lattice(3, [[0, 1, 1]])
+        L2 = L.copy()
+        self.assertEqual(L2, L)
+        L2._assert_consistent()
+        self.assertEqual(repr(L2), repr(L))
+
     def test_construction(self):
         with self.assertRaises(TypeError):
             Lattice()
@@ -764,6 +807,8 @@ class TestLatticeAPI(unittest.TestCase):
             Lattice(N=2)
         with self.assertRaises(TypeError):
             Lattice(2, 0, 0)
+        with self.assertRaises(TypeError):
+            Lattice(3, [0, 1, 1])
 
         for N in range(5):
             L = Lattice(N)
@@ -788,7 +833,7 @@ class TestLatticeAPI(unittest.TestCase):
                     self.assertEqual(L.maxrank, min(N, maxrank))
                     self.assertEqual(L.HNF_policy, HNF_policy)
 
-    def test_maxrank(self):
+    def test_maxrank_raises(self):
         L = Lattice(3, maxrank=0)
         # should be able to add the zero vector
         L.add_vector(Vector([0, 0, 0]))
@@ -845,6 +890,23 @@ class TestLatticeAPI(unittest.TestCase):
                 for vec in basis[-1:]:
                     L.add_vector(vec)
                 self.assertIs(L.is_full(), True)
+
+    def test_not_is_full_after_clear(self):
+        L = Lattice.full(3)
+        self.assertEqual(L.tolist(), [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        self.assertTrue(L.is_full())
+        L.clear()
+        self.assertEqual(L.tolist(), [])
+        self.assertFalse(L.is_full())
+
+    def test_clear(self):
+        for N in range(5):
+            L = Lattice(N)
+            L.add_vector(Vector([2]*N))
+            L.add_vector(Vector([3]*N))
+            self.assertIsNone(L.clear())
+            L._assert_consistent()
+            self.assertEqual(L.tolist(), [])
 
     def test_full(self):
         Lattice.full(0)._assert_consistent()

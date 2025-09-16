@@ -1497,13 +1497,19 @@ typedef struct {
 } Lattice;
 
 static TagInt *
-Lattice_push_vector(Lattice *L, TagInt *vec)
+Lattice_push_vector(Lattice *L, TagInt *vec, Py_ssize_t j0)
 {
     // Naively push a vector to the end of the basis.
     Py_ssize_t N = L->N;
     assert(L->rank <= L->maxrank);
     TagInt *buf = L->buffer_for_tagints + N*L->rank;
-    for (Py_ssize_t j = 0; j < N; j++) {
+#ifndef NDEBUG
+    for (Py_ssize_t j = 0; j < j0; j++) {
+        assert(TagInt_is_zero(buf[j]));
+    }
+#endif
+    for (Py_ssize_t j = j0; j < N; j++) {
+        assert(TagInt_is_zero(buf[j]));
         buf[j] = TagInt_copy(vec[j]);
     }
     return buf;
@@ -1519,8 +1525,12 @@ Lattice_pop_vector(Lattice *L, Py_ssize_t j0)
     }
 }
 
+static PyObject *
+Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other));
+
 static void
-Lattice_clear(PyObject *self) {
+Lattice_clear_impl(PyObject *self)
+{
     Lattice *L = (Lattice *)self;
     Py_ssize_t N = L->N, R = L->rank;
     L->rank = 0;
@@ -1534,12 +1544,21 @@ Lattice_clear(PyObject *self) {
         L->col_to_pivot[i] = -1;
     }
     L->num_zero_columns = N;
+    L->errored = false;
+    L->is_full = (N == 0);
     L->first_HNF_row = 0;
+}
+
+static PyObject *
+Lattice_clear(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    Lattice_clear_impl(self);
+    Py_RETURN_NONE;
 }
 
 static void
 Lattice_dealloc(PyObject *self) {
-    Lattice_clear(self);
+    Lattice_clear_impl(self);
     Py_TYPE(self)->tp_free(self);
 }
 
@@ -1571,6 +1590,22 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
     assert(R <= L->maxrank);
     assert(L->maxrank <= N);
     TagInt **basis = L->basis;
+
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
+    {
+        // assert the pool of free data to use is actually zeros.
+        TagInt *t0 = L->buffer_for_tagints + N*R;
+        TagInt *t1 = L->buffer_for_tagints + N*(L->maxrank + 1);
+        for (TagInt *t = t0; t < t1; t++) {
+            if (!TagInt_is_zero(*t)) {
+                PyErr_SetString(PyExc_AssertionError, "unused TagInts were nonzero");
+                return NULL;
+            }
+        }
+    }
 
     Py_ssize_t nzc = L->num_zero_columns;
     Py_ssize_t *zero_columns = L->zero_columns;
@@ -1820,7 +1855,8 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
 }
 
 static PyObject *
-Lattice_full(PyTypeObject *type, PyObject *arg) {
+Lattice_full(PyObject *cls, PyObject *arg)
+{
     if (!PyLong_Check(arg)) {
         PyErr_SetString(PyExc_TypeError, "Lattice.full(N) argument must be integer");
         return NULL;
@@ -1833,7 +1869,7 @@ Lattice_full(PyTypeObject *type, PyObject *arg) {
         PyErr_SetString(PyExc_ValueError, "Lattice.full(N) argument cannot be negative");
         return NULL;
     }
-    Lattice *L = (Lattice *)Lattice_new_impl(type, N, 1, N);
+    Lattice *L = (Lattice *)Lattice_new_impl((PyTypeObject *)cls, N, 1, N);
     if (L == NULL) {
         return NULL;
     }
@@ -1865,7 +1901,7 @@ Lattice_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
         return NULL;
     }
     for (Py_ssize_t i = 0; i < R; i++) {
-        L_copy->basis[i] = Lattice_push_vector(L_copy, L->basis[i]);
+        L_copy->basis[i] = Lattice_push_vector(L_copy, L->basis[i], L->row_to_pivot[i]);
         L_copy->row_to_pivot[i] = L->row_to_pivot[i];
         L_copy->rank++;
     }
@@ -1943,7 +1979,7 @@ Lattice_nomutate_make_zero_at_entry_with_objects(
 static int
 Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
 {
-    vec = Lattice_push_vector(L, vec);
+    vec = Lattice_push_vector(L, vec, j);
     Py_ssize_t N = L->N;
     for (; j < N; j++) {
         if (TagInt_is_zero(vec[j])) {
@@ -2038,6 +2074,10 @@ static int
 Lattice_contains(PyObject *self, PyObject *other)
 {
     assert(Py_TYPE(self) == &Lattice_Type);
+    if (((Lattice *)self)->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     if (Py_TYPE(other) != &Vector_Type) {
         PyErr_SetString(PyExc_TypeError, "Lattice.__contains__ argument should be Vector");
         return -1;
@@ -2058,6 +2098,10 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         return NULL;
     }
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     Py_ssize_t N = L->N, R = L->rank;
     if (Py_SIZE(other) != L->N) {
         PyErr_SetString(PyExc_ValueError, "L.coefficients_of(v) argument length mismatch");
@@ -2068,7 +2112,7 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         return NULL;
     }
     TagInt *result_vec = Vector_get_vec(result);
-    TagInt *vec = Lattice_push_vector(L, Vector_get_vec(other));
+    TagInt *vec = Lattice_push_vector(L, Vector_get_vec(other), 0);
     for (Py_ssize_t i = 0; i < R; i++) {
         Py_ssize_t j = L->row_to_pivot[i];
         if (TagInt_is_zero(vec[j])) {
@@ -2137,6 +2181,10 @@ static PyObject *
 Lattice_linear_combination(PyObject *self, PyObject *other)
 {
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     Py_ssize_t N = L->N, R = L->rank;
     if (Py_TYPE(other) != &Vector_Type) {
         PyErr_SetString(PyExc_TypeError, "L.linear_combination(w) argument must be Vector");
@@ -2432,7 +2480,7 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
         return false;
     }
     // Copy without an allocation!
-    vec = Lattice_push_vector(L, vec);
+    vec = Lattice_push_vector(L, vec, 0);
     Py_ssize_t N = L->N;
     for (Py_ssize_t j = 0; j < N; j++) {
         if (TagInt_is_zero(vec[j])) {
@@ -2445,6 +2493,7 @@ Lattice_add_vector_impl(Lattice *L, TagInt *vec)
                 L->errored = true;
                 return true;
             }
+            assert(TagInt_is_zero(vec[j]));
             continue;
         }
         if (L->rank == L->maxrank) {
@@ -2501,6 +2550,10 @@ Lattice_get_basis(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     Py_ssize_t N = L->N;
     Py_ssize_t R = L->rank;
     PyObject *result = PyList_New(R);
@@ -2523,6 +2576,10 @@ Lattice_tolist(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     Py_ssize_t N = L->N;
     Py_ssize_t R = L->rank;
     PyObject *result = PyList_New(R);
@@ -2560,6 +2617,10 @@ Lattice_inplace_add(PyObject *self, PyObject *other)
     }
     Lattice *L_self = (Lattice *)self;
     Lattice *L_other = (Lattice *)other;
+    if (L_self->errored || L_other->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     if (L_self->N != L_other->N) {
         PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.__iadd__");
         return NULL;
@@ -2580,6 +2641,10 @@ Lattice_add(PyObject *self, PyObject *other)
     Lattice *L2 = (Lattice *)other;
     if (L1->N != L2->N) {
         PyErr_SetString(PyExc_ValueError, "length mismatch in Lattice.__add__");
+        return NULL;
+    }
+    if (L1->errored || L2->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
         return NULL;
     }
     if (L2->rank > L1->rank) {
@@ -2660,6 +2725,10 @@ Lattice_richcompare(PyObject *a, PyObject *b, int op)
     }
     Lattice *L1 = (Lattice *)a;
     Lattice *L2 = (Lattice *)b;
+    if (L1->errored || L2->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     if (L1->N != L2->N) {
         PyErr_SetString(PyExc_ValueError, "Can't compare lattices with different ambient dimensions");
         return NULL;
@@ -2785,6 +2854,7 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
         return false;
     }
     if (make_pivots_positive(L)) {
+        L->errored = true;
         return true;
     }
     Py_ssize_t R = L->rank;
@@ -2875,6 +2945,10 @@ static PyObject *
 Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     if (Lattice_HNFify_impl(L, 0)) {
         return NULL;
     }
@@ -2886,6 +2960,10 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     // Just find the entries of the diagonal
     // This function doesn't ensure they have all the right divisibility.
+    if (((Lattice *)self)->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     Lattice *L = (Lattice *)Lattice_copy(self, NULL);
     if (L == NULL){
         return NULL;
@@ -3059,6 +3137,9 @@ static PyObject *
 Lattice_repr(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        return PyUnicde_FromString("<corrupted Lattice>");
+    }
     PyObject *result = NULL, *empty=NULL, *start=NULL, *close=NULL;
     PyObject *N_obj=NULL, *N_str=NULL, *HNF_policy0=NULL;
     PyObject *maxrankeq_str=NULL, *maxrank_obj=NULL, *maxrank_str=NULL;
@@ -3110,8 +3191,12 @@ error:
 }
 
 static PyObject *
-Lattice_str(PyObject *self) {
+Lattice_str(PyObject *self)
+{
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        return PyUnicde_FromString("<corrupted Lattice>");
+    }
     Py_ssize_t R = L->rank, N = L->N;
     if (R == 0) {
         PyObject *N_obj = PyLong_FromSsize_t(N);
@@ -3191,6 +3276,10 @@ Lattice___getnewargs_ex__(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     assert(Py_TYPE(self) == &Lattice_Type);
     Lattice *L = (Lattice *)self;
+    if (L->errored) {
+        PyErr_SetString(PyExc_RuntimeError, "Using a Lattice after an error occurred");
+        return NULL;
+    }
     PyObject *tolist = Lattice_tolist(self, NULL);
     if (tolist == NULL) {
         return NULL;
@@ -3201,11 +3290,11 @@ Lattice___getnewargs_ex__(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyMethodDef Lattice_methods[] = {
-    {"clear", (PyCFunction)Lattice_clear, METH_NOARGS,
+    {"clear", Lattice_clear, METH_NOARGS,
      "L.clear() replaces the Lattice with the zero Lattice in the same ambient dimension"},
-    {"copy", (PyCFunction)Lattice_copy, METH_NOARGS,
+    {"copy", Lattice_copy, METH_NOARGS,
      "L.copy() makes a copy of the lattice L"},
-    {"add_vector", (PyCFunction)Lattice_add_vector, METH_O,
+    {"add_vector", Lattice_add_vector, METH_O,
      "L.add_vector(v) adds the vector v to the Lattice L"},
     {"get_basis", Lattice_get_basis, METH_NOARGS,
      "L.get_basis() returns a list of basis vectors for L"},
@@ -3227,7 +3316,7 @@ static PyMethodDef Lattice_methods[] = {
      "The same as L.invariants(), but exclude zeros and don't guarantee any divisibility."},
     {"is_full", Lattice_is_full, METH_NOARGS,
      "Returns True iff the lattice is the entirety of Z^N"},
-    {"full", (PyCFunction)Lattice_full, METH_O | METH_CLASS,
+    {"full", Lattice_full, METH_O | METH_CLASS,
      "Returns the entire lattice Z^N"},
     {"__getnewargs_ex__", Lattice___getnewargs_ex__, METH_NOARGS,
      "get the arguments to reconstruct this Lattice"},
@@ -3239,7 +3328,7 @@ static PyMethodDef Lattice_methods[] = {
 };
 
 static PyMemberDef Lattice_members[] = {
-    {"ambient_dimension", Py_T_PYSSIZET, offsetof(PyVarObject, ob_size), Py_READONLY},
+    {"ambient_dimension", Py_T_PYSSIZET, offsetof(Lattice, N), Py_READONLY},
     {"maxrank", Py_T_PYSSIZET, offsetof(Lattice, maxrank), Py_READONLY},
     {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY},
     {"HNF_policy", Py_T_INT, offsetof(Lattice, HNF_policy), Py_READONLY},
