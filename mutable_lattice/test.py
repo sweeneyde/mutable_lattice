@@ -12,6 +12,7 @@ from . import (
     generalized_row_op,
     Lattice,
     xgcd,
+    relations_among,
 )
 from .pylattice import PyLattice
 
@@ -49,7 +50,7 @@ class TestVector(unittest.TestCase):
                          [-10*100, -10, -1, 0, 1, 10, 10**100])
         self.assertEqual(Vector(self.VALUES).tolist(), self.VALUES)
 
-    def test_Vector_numbigints(self):
+    def test_Vector_num_bigints(self):
         self.assertEqual(Vector([])._num_bigints(), 0)
         self.assertEqual(Vector([10, 20, 30])._num_bigints(), 0)
         self.assertEqual(Vector(list(range(-100, 100)))._num_bigints(), 0)
@@ -166,6 +167,17 @@ class TestVector(unittest.TestCase):
         for n in range(10):
             self.assertEqual(Vector.zero(n).tolist(), [0]*n)
 
+    def test_equality_simple(self):
+        p = Vector([1,2])
+        v = Vector([1,2,3])
+        w = Vector([4,5,6])
+        self.assertNotEqual(v, None)
+        self.assertNotEqual(v, [1,2,3])
+        self.assertNotEqual(p, v)
+        self.assertNotEqual(v, w)
+        self.assertEqual(v.copy(), v)
+        self.assertEqual(v, v)
+
     def test_equality(self):
         VALUES = self.VALUES
         vecs = [Vector([x]) for x in VALUES]
@@ -183,20 +195,41 @@ class TestVector(unittest.TestCase):
                    self.assertEqual(u, Vector(u.tolist()))
 
     def test_errors(self):
-        with self.assertRaises(TypeError): Vector()
-        with self.assertRaises(TypeError): Vector([], foo="bar")
-        with self.assertRaises(TypeError): Vector("hello")
-        with self.assertRaises(TypeError): Vector(0)
-        with self.assertRaises(TypeError): Vector([1], [2], [3])
-        with self.assertRaises(TypeError): Vector([False])
-        with self.assertRaises(TypeError): Vector.zero("foobar")
-        with self.assertRaises(ValueError): Vector.zero(-1)
+        with self.assertRaisesRegex(TypeError, "takes exactly one argument"):
+            Vector()
+        with self.assertRaisesRegex(TypeError, "takes no keyword arguments"):
+            Vector([], foo="bar")
+        with self.assertRaisesRegex(TypeError, "argument must be list"):
+            Vector("hello")
+        with self.assertRaisesRegex(TypeError, "argument must be list"):
+            Vector(0)
+        with self.assertRaisesRegex(TypeError, "takes exactly one argument"):
+            Vector([1], [2], [3])
+        with self.assertRaisesRegex(TypeError, "argument must be a list of int"):
+            Vector([False])
+        with self.assertRaises(TypeError):
+            Vector.zero("foobar")
+        with self.assertRaisesRegex(ValueError, "argument must be nonnegative"):
+            Vector.zero(-1)
+        p = Vector([1,2])
         v = Vector([1,2,3])
         w = Vector([4,5,6])
+        with self.assertRaisesRegex(ValueError, "size mismatch.+addition"):
+            p += v
+        with self.assertRaisesRegex(ValueError, "size mismatch.+addition"):
+            p + v
+        with self.assertRaisesRegex(ValueError, "size mismatch.+subtraction"):
+            p -= v
+        with self.assertRaisesRegex(ValueError, "size mismatch.+subtraction"):
+            p - v
         with self.assertRaises(TypeError): v *= w
         with self.assertRaises(TypeError): v * w
         with self.assertRaises(TypeError): v + 0
         with self.assertRaises(TypeError): v += 0
+        with self.assertRaises(TypeError): w - 0
+        with self.assertRaises(TypeError): v -= 0
+        with self.assertRaises(TypeError): v < w
+        with self.assertRaises(TypeError): v <= w
 
 class TestRowOps(unittest.TestCase):
     def setUp(self):
@@ -1001,6 +1034,67 @@ class TestLatticeAPI(unittest.TestCase):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).linear_combination(Vector([1, 10])), Vector([2, 20]))
         self.assertEqual(Lattice(2, [[2, 0]]).linear_combination(Vector([-1])), Vector([-2, 0]))
         self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).linear_combination(Vector([3, -2])), Vector([30, -10, -10]))
+
+class TestKernels(unittest.TestCase):
+    def test_relations_among(self):
+        self.assertEqual(
+            relations_among([Vector([10]*100), Vector([20]*100)]),
+            Lattice(2, [[2, -1]])
+        )
+        self.assertEqual(
+            relations_among([Vector([60]), Vector([100]), Vector([150])]),
+            Lattice(3, [[5, -3, 0], [0, 3, -2]])
+        )
+        self.assertEqual(
+            relations_among([]),
+            Lattice(0),
+        )
+        self.assertEqual(
+            relations_among([Vector([]), Vector([]), Vector([])]),
+            Lattice.full(3),
+        ),
+        self.assertEqual(
+            relations_among([Vector([17])]),
+            Lattice(1),
+        )
+        self.assertEqual(
+            relations_among([Vector([17]), Vector([0])]),
+            Lattice(2, [[0, 1]]),
+        )
+        self.assertEqual(
+            relations_among([Vector([0, 0, 0])]*100),
+            Lattice.full(100)
+        )
+        # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
+        self.assertEqual(
+            relations_among([
+                Vector([4, 1, 0, 4]),
+                Vector([7, 0, 1, 7]),
+                Vector([9, 5, 0, 6]),
+                Vector([7, 8, 1, 5]),
+                Vector([5, 9, 9, 1]),
+                Vector([0, 1, 7, 4]),
+            ]),
+            Lattice(6, [[26, -31, 30, -21, -2, 10], [-47, -13, 48, -14, -11, 18]]),
+        )
+
+    def test_relations_among_random(self):
+        VALUES = make_some_values()
+        for N in range(5):
+            zero_N = Vector.zero(N)
+            for R in range(5):
+                for _ in range(10):
+                    vecs = [Vector(random.choices(VALUES, k=N)) for _ in range(R)]
+                    rank = Lattice(N, vecs, maxrank=R).rank
+                    kernel = relations_among(vecs)
+                    # Ensure the kernel has the correct rank
+                    self.assertEqual(kernel.rank + rank, R)
+                    # Ensure the computed kernel vectors are actually relations
+                    for row in kernel.tolist():
+                        lin_combo = sum((c*vec for (c, vec) in zip(row, vecs)), start=zero_N)
+                        self.assertEqual(lin_combo, zero_N)
+                    # Ensure the kernel is saturated
+                    self.assertEqual(kernel.invariants(), [1]*kernel.rank + [0] * rank)
 
 if __name__ == "__main__":
     unittest.main(exit=False)

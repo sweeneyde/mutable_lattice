@@ -643,7 +643,8 @@ Vector_from_TagInts(TagInt *t, Py_ssize_t N) {
 }
 
 static PyObject *
-Vector_copy(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+Vector_copy(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
     assert(Py_TYPE(self) == &Vector_Type);
     return Vector_from_TagInts(Vector_get_vec(self), Py_SIZE(self));
 }
@@ -855,7 +856,8 @@ Vector_tolist_impl(TagInt *vec, Py_ssize_t N)
 }
 
 static PyObject *
-Vector_tolist(PyObject *self, PyObject *Py_UNUSED(ignored)) {
+Vector_tolist(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
     return Vector_tolist_impl(Vector_get_vec(self), Py_SIZE(self));
 }
 
@@ -2135,7 +2137,7 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
             }
             intptr_t q = vecj / rowj;
             if (!is_packable_int(q)) {
-                // If vecj==INTPTR_MIN/2 and rowj==-1.
+                // Happends if vecj==INTPTR_MIN/2 and rowj==-1.
                 goto slowpath;
             }
             intptr_t neg_q = -q;
@@ -2470,7 +2472,7 @@ update_is_full(Lattice *L)
 {
     Py_ssize_t N = L->N;
     if (L->rank == N) {
-        for (Py_ssize_t i = 0; i < N; i++) {
+        for (Py_ssize_t i = N - 1; i >= 0; i--) {
             assert(L->row_to_pivot[i] == i);
             TagInt p = L->basis[i][i];
             if (!TagInt_is_one(p) && !TagInt_is_negative_one(p)) {
@@ -2856,8 +2858,7 @@ make_pivots_positive(Lattice *L)
             goto error;
         }
         if (neg) {
-            Py_ssize_t end_j = L->N;
-            if (Vector_negate_impl(&row[j], end_j - j)) {
+            if (Vector_negate_impl(&row[j], L->N - j)) {
                 goto error;
             }
         }
@@ -3353,6 +3354,81 @@ static PyTypeObject Lattice_Type = {
     .tp_repr = Lattice_repr,
 };
 
+/*********************************************************************/
+/* relations_among, transpose                                        */
+/*********************************************************************/
+
+static PyObject *
+relations_among(PyObject *mod, PyObject *arg)
+{
+    if (!PyList_CheckExact(arg)) {
+        PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list");
+        return NULL;
+    }
+    Py_ssize_t R = PyList_GET_SIZE(arg);
+    if (R == 0) {
+        return Lattice_new_impl(&Lattice_Type, 0, 1, 0);
+    }
+    Py_ssize_t N = -1;
+    for (Py_ssize_t i = 0; i < R; i++) {
+        PyObject *v = PyList_GET_ITEM(arg, i);
+        if (Py_TYPE(v) != &Vector_Type) {
+            PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list of Vector");
+            return NULL;
+        }
+        if (i == 0) {
+            N = Py_SIZE(v);
+        } else {
+            if (Py_SIZE(v) != N) {
+                PyErr_SetString(PyExc_TypeError, "size mismatch in relations_among");
+                return NULL;
+            }
+        }
+    }
+    if (N > PY_SSIZE_T_MAX - R || N + R > PY_SSIZE_T_MAX/sizeof(TagInt *)) {
+        PyErr_SetNone(PyExc_OverflowError);
+        return NULL;
+    }
+    TagInt *scratch = (TagInt *)PyMem_Malloc((N + R) * sizeof(TagInt *));
+    if (scratch == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N + R, 1, R);
+    if (L == NULL) {
+        PyMem_Free(scratch);
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(arg); i++) {
+        PyObject *v = PyList_GET_ITEM(arg, i);
+        memcpy(scratch, Vector_get_vec(v), N*sizeof(TagInt *));
+        memset(scratch + N, 0, R*sizeof(TagInt *));
+        scratch[N+i] = TagInt_ONE;
+        if (Lattice_add_vector_impl(L, scratch)) {
+            PyMem_Free(scratch);
+            Py_DECREF(L);
+            return NULL;
+        }
+    }
+    PyMem_Free(scratch);
+    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
+    if (result == NULL) {
+        Py_DECREF(L);
+        return NULL;
+    }
+    assert(L->rank == R);
+    for (Py_ssize_t i = 0; i < R; i++) {
+        if (L->row_to_pivot[i] >= N) {
+            if (Lattice_add_vector_impl(result, L->basis[i] + N)) {
+                Py_DECREF(L);
+                Py_DECREF(result);
+                return NULL;
+            }
+        }
+    }
+    Py_DECREF(L);
+    return result;
+}
 
 /*********************************************************************/
 /* Module stuff                                                      */
@@ -3387,6 +3463,8 @@ static PyMethodDef mutable_lattice_methods[] = {
      "generalized_row_op(v, w, a, b, c, d) does (v, w) = (a*v+b*w, c*v+d*w) when v and w are Vectors"},
     {"xgcd", (PyCFunction)(void(*)(void))xgcd, METH_FASTCALL,
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
+    {"relations_among", relations_among, METH_O,
+     "relations_among([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

@@ -4,4 +4,5 @@ from _mutable_lattice import (
     generalized_row_op,
     Lattice,
     xgcd,
+    relations_among,
 )
