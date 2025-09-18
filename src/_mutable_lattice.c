@@ -9,37 +9,44 @@
 #define USE_FAST_PATHS 1
 
 static inline PyObject *
-pylong_add(PyObject *a, PyObject *b) {
+pylong_add(PyObject *a, PyObject *b)
+{
     return PyLong_Type.tp_as_number->nb_add(a, b);
 }
 
 static inline PyObject *
-pylong_subtract(PyObject *a, PyObject *b) {
+pylong_subtract(PyObject *a, PyObject *b)
+{
     return PyLong_Type.tp_as_number->nb_subtract(a, b);
 }
 
 static inline PyObject *
-pylong_multiply(PyObject *a, PyObject *b) {
+pylong_multiply(PyObject *a, PyObject *b)
+{
     return PyLong_Type.tp_as_number->nb_multiply(a, b);
 }
 
 static inline PyObject *
-pylong_floor_divide(PyObject *a, PyObject *b) {
+pylong_floor_divide(PyObject *a, PyObject *b)
+{
     return PyLong_Type.tp_as_number->nb_floor_divide(a, b);
 }
 
 static inline PyObject *
-pylong_remainder(PyObject *a, PyObject *b) {
+pylong_remainder(PyObject *a, PyObject *b)
+{
     return PyLong_Type.tp_as_number->nb_remainder(a, b);
 }
 
 static inline PyObject *
-pylong_negative(PyObject *a) {
+pylong_negative(PyObject *a)
+{
     return PyLong_Type.tp_as_number->nb_negative(a);
 }
 
 static inline int
-pylong_lt(PyObject *a, PyObject *b) {
+pylong_lt(PyObject *a, PyObject *b)
+{
     PyObject *res = PyLong_Type.tp_richcompare(a, b, Py_LT);
     if (res == NULL) {
         return -1;
@@ -49,7 +56,8 @@ pylong_lt(PyObject *a, PyObject *b) {
 }
 
 static inline int
-pylong_bool(PyObject *x) {
+pylong_bool(PyObject *x)
+{
     int res = PyLong_Type.tp_as_number->nb_bool(x);
     assert(res >= 0);
     return res;
@@ -63,7 +71,8 @@ pylong_repr(PyObject *x)
 }
 
 static inline PyObject *
-PyLong_FromIntptr(intptr_t x) {
+PyLong_FromIntptr(intptr_t x)
+{
     static_assert(sizeof(intptr_t) == sizeof(Py_ssize_t));
     return PyLong_FromSsize_t(x);
 }
@@ -99,7 +108,8 @@ PyLong_FromIntptr(intptr_t x) {
 # define PyLong_AsIntptrAndOverflow PyLong_AsLongLongAndOverflow
 
 static inline bool
-intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     bool err = (b < 0) ? (a < INTPTR_MIN - b)
                        : (a > INTPTR_MAX - b);
     if (!err) {
@@ -107,8 +117,10 @@ intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res) {
     }
     return err;
 }
+
 static inline bool
-intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     bool err = (b < 0) ? (a > INTPTR_MAX + b)
                        : (a < INTPTR_MIN + b);
     if (!err) {
@@ -116,8 +128,10 @@ intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res) {
     }
     return err;
 }
+
 static inline bool
-intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     static_assert(sizeof(uintptr_t) == sizeof(uint64_t));
     intptr_t high_word = __mulh(a, b);
     uintptr_t low_word = ((uintptr_t)a) * ((uintptr_t)b);
@@ -141,7 +155,8 @@ intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res) {
 #  define PyLong_AsIntptrAndOverflow PyLong_AsLongAndOverflow
 
 static inline bool
-intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     int64_t aa = a;
     int64_t bb = b;
     int64_t cc = aa + bb;
@@ -151,8 +166,10 @@ intptr_add_overflow(intptr_t a, intptr_t b, intptr_t *res) {
     }
     return true;
 }
+
 static inline bool
-intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     int64_t aa = a;
     int64_t bb = b;
     int64_t cc = aa-bb;
@@ -162,8 +179,10 @@ intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res) {
     }
     return true;
 }
+
 static inline bool
-intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res) {
+intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res)
+{
     int64_t aa = a;
     int64_t bb = b;
     int64_t cc = aa*bb;
@@ -188,52 +207,70 @@ typedef struct {
     intptr_t bits;
 } TagInt;
 
-static inline bool TagInt_is_pointer(TagInt t) {
+static inline bool
+TagInt_is_pointer(TagInt t)
+{
     return (t.bits & 1);
 }
 
-static inline TagInt _tag_pointer(PyObject *obj) {
+static inline TagInt
+_tag_pointer(PyObject *obj)
+{
     static_assert(_Alignof(PyObject) % 2 == 0);
     assert((((intptr_t)(void *)obj) & 1) == 0);
     return (TagInt) { .bits = ((intptr_t)(void *)obj) | 1 };
 }
 
-static inline PyObject *untag_pointer(TagInt t) {
+static inline PyObject *
+untag_pointer(TagInt t)
+{
     assert(TagInt_is_pointer(t));
     return (PyObject *)(void *)(t.bits & ~1);
 }
 
-static inline bool is_packable_int(intptr_t x) {
+static inline bool
+is_packable_int(intptr_t x)
+{
     return (INTPTR_MIN/2 <= x) && (x <= INTPTR_MAX/2);
 }
 
-static inline TagInt pack_integer(intptr_t x) {
+static inline TagInt
+pack_integer(intptr_t x)
+{
     assert(is_packable_int(x));
     return (TagInt) {.bits = x * 2};
 }
 
-static inline intptr_t unpack_integer(TagInt t) {
+static inline intptr_t
+unpack_integer(TagInt t)
+{
     assert(!TagInt_is_pointer(t));
     return t.bits / 2;
 }
 
 #define TagInt_ONE ((TagInt) {.bits = 2})
 
-static inline bool TagInt_is_zero(TagInt t) {
+static inline bool
+TagInt_is_zero(TagInt t) {
     return (t.bits == 0);
 }
 
-static inline bool TagInt_is_one(TagInt t) {
+static inline bool
+TagInt_is_one(TagInt t)
+{
     return (t.bits == 2);
 }
 
-static inline bool TagInt_is_negative_one(TagInt t) {
+static inline bool
+TagInt_is_negative_one(TagInt t)
+{
     return (t.bits == -2);
 }
 
 // steals the obj reference to put in *t
 static bool
-object_to_TagInt_steal(PyObject *obj, TagInt *t) {
+object_to_TagInt_steal(PyObject *obj, TagInt *t)
+{
     int overflow;
     intptr_t L = PyLong_AsIntptrAndOverflow(obj, &overflow);
     if (L == -1 && PyErr_Occurred()) {
@@ -249,14 +286,18 @@ object_to_TagInt_steal(PyObject *obj, TagInt *t) {
     return false;
 }
 
-static inline TagInt TagInt_copy(TagInt t) {
+static inline TagInt
+TagInt_copy(TagInt t)
+{
     if (TagInt_is_pointer(t)) {
         Py_INCREF(untag_pointer(t));
     }
     return t;
 }
 
-static inline void destroy_TagInt(TagInt *t) {
+static inline void
+destroy_TagInt(TagInt *t)
+{
     TagInt tt = *t;
     t->bits = 0;
     if (TagInt_is_pointer(tt)) {
@@ -264,7 +305,9 @@ static inline void destroy_TagInt(TagInt *t) {
     }
 }
 
-static PyObject *TagInt_to_object(TagInt t) {
+static PyObject *
+TagInt_to_object(TagInt t)
+{
     if (TagInt_is_pointer(t)) {
         return Py_NewRef(untag_pointer(t));
     } else {
@@ -273,7 +316,9 @@ static PyObject *TagInt_to_object(TagInt t) {
 }
 
 // Puts a new reference in *c.
-static bool _TagInt_add_with_objects(TagInt a, TagInt b, TagInt *c) {
+static bool
+_TagInt_add_with_objects(TagInt a, TagInt b, TagInt *c)
+{
     if (TagInt_is_zero(a)) {
         *c = TagInt_copy(b);
         return false;
@@ -299,7 +344,9 @@ static bool _TagInt_add_with_objects(TagInt a, TagInt b, TagInt *c) {
     return object_to_TagInt_steal(c_obj, c);
 }
 
-static inline bool TagInt_add(TagInt a, TagInt b, TagInt *c) {
+static inline bool
+TagInt_add(TagInt a, TagInt b, TagInt *c)
+{
     if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
         if (!intptr_add_overflow(a.bits, b.bits, &c->bits)) {
             return false;
@@ -324,7 +371,8 @@ _TagInt_negative_with_objects(TagInt a, TagInt *res)
     return object_to_TagInt_steal(neg_a, res);
 }
 
-static inline bool TagInt_negative(TagInt a, TagInt *res)
+static inline bool
+TagInt_negative(TagInt a, TagInt *res)
 {
     if (!TagInt_is_pointer(a) && a.bits != INTPTR_MIN) {
         res->bits = -a.bits;
@@ -334,7 +382,8 @@ static inline bool TagInt_negative(TagInt a, TagInt *res)
 }
 
 static inline int
-TagInt_is_negative(TagInt a, PyObject *zero) {
+TagInt_is_negative(TagInt a, PyObject *zero)
+{
     if (!TagInt_is_pointer(a)) {
         return a.bits < 0;
     }
@@ -342,7 +391,9 @@ TagInt_is_negative(TagInt a, PyObject *zero) {
 }
 
 // Puts a new reference in *c.
-static bool _TagInt_sub_with_objects(TagInt a, TagInt b, TagInt *c) {
+static bool
+_TagInt_sub_with_objects(TagInt a, TagInt b, TagInt *c)
+{
     if (TagInt_is_zero(b)) {
         *c = TagInt_copy(a);
         return false;
@@ -365,7 +416,9 @@ static bool _TagInt_sub_with_objects(TagInt a, TagInt b, TagInt *c) {
     return object_to_TagInt_steal(c_obj, c);
 }
 
-static inline bool TagInt_sub(TagInt a, TagInt b, TagInt *c) {
+static inline bool
+TagInt_sub(TagInt a, TagInt b, TagInt *c)
+{
     if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
         if (!intptr_sub_overflow(a.bits, b.bits, &c->bits)) {
             return false;
@@ -376,7 +429,8 @@ static inline bool TagInt_sub(TagInt a, TagInt b, TagInt *c) {
 }
 
 // Puts a new reference in *c.
-static bool TagInt_scale_with_objects(
+static bool
+TagInt_scale_with_objects(
     TagInt a, PyObject *m_obj, TagInt *c)
 {
     if (TagInt_is_zero(a)) {
@@ -398,7 +452,8 @@ static bool TagInt_scale_with_objects(
     return object_to_TagInt_steal(c_obj, c);
 }
 
-static inline bool TagInt_scale(
+static inline bool
+TagInt_scale(
     TagInt a, intptr_t m, PyObject *m_obj, TagInt *c)
 {
     if (!TagInt_is_pointer(a)) {
@@ -411,7 +466,8 @@ static inline bool TagInt_scale(
 }
 
 // Do w += k*v in place
-static bool TagInt_row_op_with_objects(
+static bool
+TagInt_row_op_with_objects(
     TagInt *v, TagInt *w, PyObject *k_obj)
 {
     PyObject *v_obj = TagInt_to_object(*v);
@@ -438,7 +494,8 @@ static bool TagInt_row_op_with_objects(
     return object_to_TagInt_steal(kv_plus_w_obj, w);
 }
 
-static inline bool TagInt_row_op(
+static inline bool
+TagInt_row_op(
     TagInt *v, TagInt *w, intptr_t k, PyObject **k_obj_cache)
 {
     if (!TagInt_is_pointer(*v) && !TagInt_is_pointer(*w)) {
@@ -464,7 +521,8 @@ static inline bool TagInt_row_op(
 }
 
 // Do (v, w) = (av+bw, cv+dw)
-static bool TagInt_generalized_row_op_with_objects(
+static bool
+TagInt_generalized_row_op_with_objects(
     TagInt *v, TagInt *w, PyObject *const *abcd_obj)
 {
     PyObject *a_obj = abcd_obj[0], *b_obj = abcd_obj[1];
@@ -504,7 +562,8 @@ error:
     return true;
 }
 
-static bool TagInt_generalized_row_op(
+static bool
+TagInt_generalized_row_op(
     TagInt *v, TagInt *w, intptr_t *abcd, PyObject **abcd_obj)
 {
     intptr_t av, bw, av_bw, cv, dw, cv_dw;
@@ -561,7 +620,8 @@ Vector_clear(PyObject *self)
 }
 
 static void
-Vector_dealloc(PyObject *self) {
+Vector_dealloc(PyObject *self)
+{
     Vector_clear(self);
     Py_TYPE(self)->tp_free(self);
 }
@@ -630,7 +690,8 @@ Vector_new(PyTypeObject *Py_UNUSED(type), PyObject *args, PyObject *kwds)
 }
 
 static PyObject *
-Vector_from_TagInts(TagInt *t, Py_ssize_t N) {
+Vector_from_TagInts(TagInt *t, Py_ssize_t N)
+{
     PyObject *result = Vector_zero_impl(&Vector_Type, N);
     if (result == NULL) {
         return NULL;
@@ -1009,7 +1070,8 @@ error:
 }
 
 static PyObject *
-Vector_str(PyObject *v) {
+Vector_str(PyObject *v)
+{
     Py_ssize_t maxlen = 0;
     PyObject *reprs = Vector_str_parts(Vector_get_vec(v), Py_SIZE(v), &maxlen);
     if (reprs == NULL) {
@@ -1071,7 +1133,8 @@ error:
 }
 
 static PyObject *
-Vector_repr(PyObject *self) {
+Vector_repr(PyObject *self)
+{
     PyObject *list = Vector_tolist(self, NULL);
     if (list == NULL) {
         return NULL;
@@ -1565,7 +1628,8 @@ Lattice_clear(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static void
-Lattice_dealloc(PyObject *self) {
+Lattice_dealloc(PyObject *self)
+{
     Lattice_clear_impl(self);
     Py_TYPE(self)->tp_free(self);
 }
@@ -2087,7 +2151,7 @@ Lattice_contains(PyObject *self, PyObject *other)
         return -1;
     }
     if (Py_TYPE(other) != &Vector_Type) {
-        PyErr_SetString(PyExc_TypeError, "Lattice.__contains__ argument should be Vector");
+        PyErr_SetString(PyExc_TypeError, "Lattice.__contains__ argument must be Vector");
         return -1;
     }
     Py_ssize_t N = ((Lattice *)self)->N;
@@ -2531,7 +2595,7 @@ Lattice_add_vector(PyObject *self, PyObject *other)
         return NULL;
     }
     if (Py_TYPE(other) != &Vector_Type) {
-        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument should be Vector");
+        PyErr_SetString(PyExc_TypeError, "Lattice.add_vector(v) argument must be Vector");
         return NULL;
     }
     if (Py_SIZE(other) != L->N) {
@@ -2715,6 +2779,9 @@ Lattice_leq_impl(Lattice *L1, Lattice *L2)
 static int
 Lattice_eq_impl(Lattice *L1, Lattice *L2)
 {
+    if (L1 == L2) {
+        return 1;
+    }
     if (L1->rank != L2->rank) {
         return 0;
     }
@@ -2754,6 +2821,12 @@ Lattice_richcompare(PyObject *a, PyObject *b, int op)
         return NULL;
     }
     if (L1->N != L2->N) {
+        if (op == Py_EQ) {
+            Py_RETURN_FALSE;
+        }
+        if (op == Py_NE) {
+            Py_RETURN_TRUE;
+        }
         PyErr_SetString(PyExc_ValueError, "Can't compare lattices with different ambient dimensions");
         return NULL;
     }
@@ -3373,14 +3446,14 @@ relations_among(PyObject *mod, PyObject *arg)
     for (Py_ssize_t i = 0; i < R; i++) {
         PyObject *v = PyList_GET_ITEM(arg, i);
         if (Py_TYPE(v) != &Vector_Type) {
-            PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list of Vector");
+            PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list of Vectors");
             return NULL;
         }
         if (i == 0) {
             N = Py_SIZE(v);
         } else {
             if (Py_SIZE(v) != N) {
-                PyErr_SetString(PyExc_TypeError, "size mismatch in relations_among");
+                PyErr_SetString(PyExc_ValueError, "length mismatch in relations_among");
                 return NULL;
             }
         }
@@ -3434,7 +3507,9 @@ relations_among(PyObject *mod, PyObject *arg)
 /* Module stuff                                                      */
 /*********************************************************************/
 
-static int mutable_lattice_module_exec(PyObject *m) {
+static int
+mutable_lattice_module_exec(PyObject *m)
+{
     if (PyType_Ready(&Vector_Type) < 0) {
         return -1;
     }

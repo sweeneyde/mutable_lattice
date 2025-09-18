@@ -33,13 +33,10 @@ def make_some_values():
 class TestVector(unittest.TestCase):
     def setUp(self):
         self.VALUES = make_some_values()
-    
+
     def tearDown(self):
         self.VALUES.clear()
         del self.VALUES
-
-    def test_do_nothing(self):
-        pass
 
     def test_Vector_tolist(self):
         self.assertEqual(Vector([]).tolist(), [])
@@ -133,7 +130,7 @@ class TestVector(unittest.TestCase):
             expected = [m * x for x in VALUES]
             self.assertEqual((m * v).tolist(), expected)
             self.assertEqual((v * m).tolist(), expected)
-    
+
     def test_copy(self):
         VALUES = self.VALUES
         v = Vector(VALUES)
@@ -148,7 +145,7 @@ class TestVector(unittest.TestCase):
         w = -v
         self.assertEqual(v.tolist(), VALUES)
         self.assertEqual(w.tolist(), [-x for x in VALUES])
-    
+
     def test_repr(self):
         self.assertEqual(repr(Vector([])), "Vector([])")
         self.assertEqual(repr(Vector([17])), "Vector([17])")
@@ -260,6 +257,16 @@ class TestRowOps(unittest.TestCase):
             self.assertEqual(vx.tolist(), vx_data)
             self.assertEqual(vy.tolist(), new_vy.tolist())
 
+    def test_row_op_errors(self):
+        with self.assertRaisesRegex(TypeError, "takes 3 arguments"):
+            row_op(Vector([10]), Vector([20]), 1, 2)
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            row_op([10], [20], 3)
+        with self.assertRaises(TypeError):
+            row_op(Vector([10]), Vector([20]), 4.2)
+        with self.assertRaisesRegex(ValueError, "must have the same length"):
+            row_op(Vector([10]), Vector([20, 30]), 4)
+
     def test_generalized_row_op_single(self):
         VALUES = [-10**50, -2, -1, 0, 1, 2, 10**50]
         for tup in itertools.product(VALUES, repeat=6):
@@ -269,7 +276,7 @@ class TestRowOps(unittest.TestCase):
             generalized_row_op(vx, vy, a, b, c, d)
             self.assertEqual(vx.tolist(), [a*x + b*y], tup)
             self.assertEqual(vy.tolist(), [c*x + d*y], tup)
-    
+
     def test_generalized_row_op_many(self):
         VALUES = list(self.VALUES)
         random.Random(0).shuffle(VALUES)
@@ -285,12 +292,28 @@ class TestRowOps(unittest.TestCase):
             self.assertEqual(vx.tolist(), new_vx.tolist())
             self.assertEqual(vy.tolist(), new_vy.tolist())
 
+    def test_generalized_row_op_errors(self):
+        with self.assertRaisesRegex(TypeError, "takes 6 arguments"):
+            generalized_row_op(Vector([10]), Vector([20]), 1, 2, 3, 4, 5)
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            generalized_row_op([10], [20], 1, 2, 3, 4)
+        with self.assertRaises(TypeError):
+            generalized_row_op(Vector([10]), Vector([20]), 1, 2.2, 3, 4)
+        with self.assertRaisesRegex(ValueError, "must have the same length"):
+            generalized_row_op(Vector([10]), Vector([20, 30]), 1, 2, 3, 4)
+
     def test_xgcd(self):
         for a, b in itertools.product(self.VALUES, repeat=2):
             x, y, g = xgcd(a, b)
             self.assertEqual(abs(g), math.gcd(a, b))
             self.assertEqual(x*a + y*b, g)
-    
+
+    def test_xgcd_errors(self):
+        with self.assertRaisesRegex(TypeError, "takes 2 arguments"):
+            xgcd(1, 2, 3)
+        with self.assertRaisesRegex(TypeError, "must be integers"):
+            xgcd(1.0, 2.0)
+
     def test_shuffled_by_array(self):
         random.seed(0)
         VALUES = list(self.VALUES)
@@ -303,15 +326,22 @@ class TestRowOps(unittest.TestCase):
                     expected[ai] += data[i]
                 self.assertEqual(Vector(data).shuffled_by_array(a).tolist(), expected)
 
-    def test_shuffled_out_of_bounds(self):
+    def test_shuffled_by_array_errors(self):
         v = Vector([0, 10, 20, 30])
         self.assertEqual(
             v.shuffled_by_array(array(array_typecode, [1, 0, 3, 2])).tolist(),
             [10, 0, 30, 20],
         )
-        a = array(array_typecode, [0, 4, 0, 0])
-        with self.assertRaises(IndexError):
-            v.shuffled_by_array(a)
+        with self.assertRaisesRegex(IndexError, "shuffle out of bounds"):
+            v.shuffled_by_array(array(array_typecode, [0, 4, 0, 0]))
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            v.shuffled_by_array(array(array_typecode, [0, 0]))
+        with self.assertRaisesRegex(TypeError, "must have word-sized integers"):
+            v.shuffled_by_array(array('b', [0, 0, 0, 0]))
+        twoD = memoryview(array(array_typecode, [1, 0, 3, 2])).cast('b').cast(array_typecode, shape=(2,2))
+        with self.assertRaisesRegex(ValueError, "must be 1D"):
+            v.shuffled_by_array(twoD)
+
 
 class LatticeTests:
 
@@ -461,21 +491,9 @@ class LatticeTests:
         self.assertEqual(str(L), "<zero Lattice in Z^4>")
         L.add_vector(Vector([0, 1, 0, 1]))
         L.add_vector(Vector([0, 0, 2, 2]))
-        self.assertEqual(str(L), 
+        self.assertEqual(str(L),
                         "[0 1 0 1]\n"
                         "[0 0 2 2]")
-
-    def test_constructor_with_data(self):
-        self.assertEqual(Lattice(0, [], HNF_policy=self.HNF_POLICY).tolist(), [])
-        self.assertEqual(Lattice(1, [], HNF_policy=self.HNF_POLICY).tolist(), [])
-        self.assertEqual(Lattice(1, [[0]], HNF_policy=self.HNF_POLICY).tolist(), [])
-        self.assertEqual(Lattice(1, [[1]], HNF_policy=self.HNF_POLICY).tolist(), [[1]])
-        self.assertEqual(Lattice(1, [[2]], HNF_policy=self.HNF_POLICY).tolist(), [[2]])
-        self.assertEqual(Lattice(2, [], HNF_policy=self.HNF_POLICY).tolist(), [])
-        self.assertEqual(Lattice(2, [[0, 0]], HNF_policy=self.HNF_POLICY).tolist(), [])
-        self.assertEqual(Lattice(2, [[1, 5]], HNF_policy=self.HNF_POLICY).tolist(), [[1, 5]])
-        self.assertEqual(Lattice(2, [[1, 0], [0, 5]], HNF_policy=self.HNF_POLICY).tolist(), [[1, 0], [0, 5]])
-        self.assertEqual(Lattice(2, [[2, 0], [0, 2], [-100, -200]], HNF_policy=self.HNF_POLICY).tolist(), [[2, 0], [0, 2]])
 
     def test_hnf(self):
         L = Lattice(2, HNF_policy=self.HNF_POLICY)
@@ -842,6 +860,8 @@ class TestLatticeAPI(unittest.TestCase):
             Lattice(2, 0, 0)
         with self.assertRaises(TypeError):
             Lattice(3, [0, 1, 1])
+        with self.assertRaisesRegex(ValueError, "argument must be nonnegative"):
+            Lattice(-3)
 
         for N in range(5):
             L = Lattice(N)
@@ -851,14 +871,12 @@ class TestLatticeAPI(unittest.TestCase):
             self.assertEqual(L.maxrank, N)
             self.assertEqual(L.HNF_policy, 1)
 
-            with self.assertRaises(ValueError):
-                Lattice(N, maxrank=-5)
-            with self.assertRaises(ValueError):
-                Lattice(N, maxrank=-5, HNF_policy=0)
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "maxrank must be >= -1"):
                 Lattice(N, maxrank=-5, HNF_policy=1)
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "unknown HNF_policy"):
                 Lattice(N, maxrank=0, HNF_policy=10)
+            with self.assertRaisesRegex(TypeError, "must be list"):
+                Lattice(N, None)
 
             for HNF_policy in [0, 1]:
                 for maxrank in range(N+3):
@@ -866,11 +884,32 @@ class TestLatticeAPI(unittest.TestCase):
                     self.assertEqual(L.maxrank, min(N, maxrank))
                     self.assertEqual(L.HNF_policy, HNF_policy)
 
+    def test_constructor_with_data(self):
+        for cls in [list, Vector]:
+            for (N, data, expected) in [
+                (0, [], []),
+                (1, [], []),
+                (1, [[0]], []),
+                (1, [[1]], [[1]]),
+                (1, [[2]], [[2]]),
+                (2, [], []),
+                (2, [[0, 0]], []),
+                (2, [[1, 5]], [[1, 5]]),
+                (2, [[1, 0], [0, 5]], [[1, 0], [0, 5]]),
+                (2, [[2, 0], [0, 2], [-100, -200]], [[2, 0], [0, 2]]),
+            ]:
+                L = Lattice(N, list(map(cls, data)))
+                self.assertEqual(L.tolist(), expected)
+
+    def test_constructor_with_data_errors(self):
+        with self.assertRaisesRegex(TypeError, "list or Vector"):
+            L = Lattice(3, [(1,2,3)])
+
     def test_maxrank_raises(self):
         L = Lattice(3, maxrank=0)
         # should be able to add the zero vector
         L.add_vector(Vector([0, 0, 0]))
-        with self.assertRaises(IndexError):
+        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
             # should not be able to add any other vector
             L.add_vector(Vector([0, 5, 0]))
         with self.assertRaises(RuntimeError):
@@ -883,7 +922,7 @@ class TestLatticeAPI(unittest.TestCase):
         L.add_vector(Vector([4, 4, 4]))
         L.add_vector(Vector([3, 3, 3]))
         L.add_vector(Vector([3, 3, 3]))
-        with self.assertRaises(IndexError):
+        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
             L.add_vector(Vector([0, 5, 0]))
         with self.assertRaises(RuntimeError):
             L.add_vector(Vector([0, 5, 0]))
@@ -948,6 +987,12 @@ class TestLatticeAPI(unittest.TestCase):
         Lattice.full(3)._assert_consistent()
         self.assertEqual(Lattice.full(3).tolist(), [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
+    def test_full_errors(self):
+        with self.assertRaisesRegex(TypeError, "must be integer"):
+            Lattice.full(None)
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            Lattice.full(-1)
+
     def test_tolist(self):
         L = Lattice(3)
         L.add_vector(Vector([1,0,0]))
@@ -1001,6 +1046,14 @@ class TestLatticeAPI(unittest.TestCase):
         # but can construct N ~ 80 MB
         Lattice(10_000_000, maxrank=3)
 
+    def test_raises_memoryerror(self):
+        with self.assertRaises(MemoryError):
+            Lattice(10_000_000)
+
+    def test_raises_overflowerror(self):
+        with self.assertRaises(OverflowError):
+            Lattice(sys.maxsize)
+
     def test_sizeof(self):
         # The size is:
         #   some overhead + 4 buffers of N words + (maxrank+1)*N words of data
@@ -1025,15 +1078,120 @@ class TestLatticeAPI(unittest.TestCase):
         diffs = {b-a for a, b in zip(sizes, sizes[1:])}
         self.assertIn(diffs, ({8*20}, {4*20}))
 
+    def test_contains(self):
+        L = Lattice(3, [[3, 0, 0], [0, 0, 10]])
+        self.assertIn(Vector([3, 0, 0]), L)
+        self.assertIn(Vector([-6, 0, 0]), L)
+        self.assertIn(Vector([0, 0, 10]), L)
+        self.assertIn(Vector([0, 0, -70]), L)
+        self.assertNotIn(Vector([1, 0, 0]), L)
+        self.assertNotIn(Vector([0, 0, 1]), L)
+        self.assertNotIn(Vector([2, 0, 2]), L)
+        self.assertNotIn(Vector([0, 30, 0]), L)
+
+    def test_contains_errors(self):
+        L = Lattice(2, [[3, 0]])
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            [3, 0] in L
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            Vector([0, 0, 0, 0, 0, 0]) in L
+
     def test_coefficients_of(self):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).coefficients_of(Vector([2, 20])), Vector([1, 10]))
         self.assertEqual(Lattice(2, [[2, 0]]).coefficients_of(Vector([-2, 0])), Vector([-1]))
         self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).coefficients_of(Vector([30, -10, -10])), Vector([3, -2]))
+        with self.assertRaisesRegex(KeyError, "Vector not present in Lattice"):
+            Lattice(3, [[2, 0, 0], [0, 2, 0], [0, 0, 2]]).coefficients_of(Vector([2, 1, 0]))
+
+    def test_coefficients_of_errors(self):
+        L = Lattice(3, [[2,0,0],[0,2,0],[0,0,2]])
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            [1, 2, 3] in L
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            Vector([1, 2]) in L
 
     def test_linear_combination(self):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).linear_combination(Vector([1, 10])), Vector([2, 20]))
         self.assertEqual(Lattice(2, [[2, 0]]).linear_combination(Vector([-1])), Vector([-2, 0]))
         self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).linear_combination(Vector([3, -2])), Vector([30, -10, -10]))
+
+    def test_linear_combination_errors(self):
+        L = Lattice(3, [[1,1,1]])
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            L.linear_combination([-1])
+        with self.assertRaisesRegex(ValueError, "must have length L.rank"):
+            L.linear_combination(Vector([1,2,3,4,5]))
+
+    def test_add_vector(self):
+        L = Lattice(3)
+        self.assertEqual(L.rank, 0)
+        L.add_vector(Vector([1, 2, 3]))
+        self.assertEqual(L.rank, 1)
+
+    def test_add_vector_errors(self):
+        L = Lattice(3)
+        with self.assertRaisesRegex(TypeError, "must be Vector"):
+            L.add_vector([1, 2, 3])
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            L.add_vector(Vector([1, 2]))
+
+    def test_lattice_iadd(self):
+        L1 = Lattice(3, [[2, 2, 2]])
+        L2 = Lattice(3, [[0, 1, 1]])
+        L1 += L2
+        L1.HNFify()
+        self.assertEqual(L1, Lattice(3, [[2, 0, 0], [0, 1, 1]]))
+        self.assertEqual(L2, Lattice(3, [[0, 1, 1]]))
+
+    def test_lattice_iadd_error(self):
+        L1 = Lattice(3, [[2, 2, 2]])
+        L2 = Lattice(2, [[1, 1]])
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            L1 += L2
+
+    def test_lattice_add(self):
+        L1 = Lattice(3, [[2, 2, 2]])
+        L2 = Lattice(3, [[0, 1, 1]])
+        L3 += L1 + L2
+        L3.HNFify()
+        self.assertEqual(L1, Lattice(3, [[2, 2, 2]]))
+        self.assertEqual(L2, Lattice(3, [[0, 1, 1]]))
+        self.assertEqual(L3, Lattice(3, [[2, 0, 0], [0, 1, 1]]))
+
+    def test_lattice_add(self):
+        L1 = Lattice(3, [[2, 2, 2]])
+        L2 = Lattice(2, [[1, 1]])
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            L1 + L2
+
+    def test_lattice_equal(self):
+        L1 = Lattice(3, [[2, 2, 2], [0, 1, 1]], HNF_policy=0)
+        L2 = Lattice(3, [[2, 0, 0], [0, 1, 1]], HNF_policy=1)
+        self.assertEqual(L1, L2)
+        self.assertNotEqual(L1.tolist(), L2.tolist())
+        self.assertNotEqual(L1, Lattice(2))
+
+    def test_lattice_leq(self):
+        L = Lattice(3, [[2, 2, 2], [0, 1, 1]], HNF_policy=0)
+        self.assertTrue(Lattice(3, [[0, 3, 3]]) <= L)
+        self.assertTrue(L <= L)
+        self.assertTrue(L.copy() <= L)
+        self.assertFalse(Lattice(3, [[0, 3, 2]]) <= L)
+
+    def test_lattice_lt(self):
+        L = Lattice(3, [[2, 2, 2], [0, 1, 1]], HNF_policy=0)
+        self.assertTrue(Lattice(3, [[0, 3, 3]]) < L)
+        self.assertFalse(L < L)
+        self.assertFalse(L.copy() < L)
+        self.assertFalse(Lattice(3, [[0, 3, 2]]) < L)
+
+    def test_lattice_compare_error(self):
+        L1 = Lattice(1)
+        L2 = Lattice(2)
+        with self.assertRaisesRegex(ValueError, "different ambient dimensions"):
+            L1 <= L2
+        with self.assertRaisesRegex(ValueError, "different ambient dimensions"):
+            L1 < L2
 
 class TestKernels(unittest.TestCase):
     def test_relations_among(self):
@@ -1079,22 +1237,33 @@ class TestKernels(unittest.TestCase):
         )
 
     def test_relations_among_random(self):
-        VALUES = make_some_values()
-        for N in range(5):
-            zero_N = Vector.zero(N)
-            for R in range(5):
-                for _ in range(10):
-                    vecs = [Vector(random.choices(VALUES, k=N)) for _ in range(R)]
-                    rank = Lattice(N, vecs, maxrank=R).rank
-                    kernel = relations_among(vecs)
-                    # Ensure the kernel has the correct rank
-                    self.assertEqual(kernel.rank + rank, R)
-                    # Ensure the computed kernel vectors are actually relations
-                    for row in kernel.tolist():
-                        lin_combo = sum((c*vec for (c, vec) in zip(row, vecs)), start=zero_N)
-                        self.assertEqual(lin_combo, zero_N)
-                    # Ensure the kernel is saturated
-                    self.assertEqual(kernel.invariants(), [1]*kernel.rank + [0] * rank)
+        for values in [
+            [-2, -1, 0, 0, 0, 0, 1, 2],
+            make_some_values(),
+        ]:
+            for N in range(5):
+                zero_N = Vector.zero(N)
+                for R in range(5):
+                    for _ in range(10):
+                        vecs = [Vector(random.choices(values, k=N)) for _ in range(R)]
+                        rank = Lattice(N, vecs, maxrank=R).rank
+                        kernel = relations_among(vecs)
+                        # Ensure the kernel has the correct rank
+                        self.assertEqual(kernel.rank + rank, R)
+                        # Ensure the computed kernel vectors are actually relations
+                        for row in kernel.tolist():
+                            lin_combo = sum((c*vec for (c, vec) in zip(row, vecs)), start=zero_N)
+                            self.assertEqual(lin_combo, zero_N)
+                        # Ensure the kernel is saturated
+                        self.assertEqual(kernel.invariants(), [1]*kernel.rank + [0] * rank)
+
+    def test_relations_among_errors(self):
+        with self.assertRaisesRegex(TypeError, "must be a list"):
+            relations_among((1, 2, 3))
+        with self.assertRaisesRegex(TypeError, "must be a list of Vectors"):
+            relations_among([1, 2, 3])
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            relations_among([Vector([1,2,3]), Vector([4,5,6,7])])
 
 if __name__ == "__main__":
     unittest.main(exit=False)
