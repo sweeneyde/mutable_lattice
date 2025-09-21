@@ -610,6 +610,44 @@ Vector_get_vec(PyObject *v)
     return ((Vec *)v)->vec;
 }
 
+static Py_ssize_t
+Vector_sq_length(PyObject *self)
+{
+    return Py_SIZE(self);
+}
+
+static PyObject *
+Vector_sq_item(PyObject *self, Py_ssize_t j)
+{
+    Py_ssize_t N = Py_SIZE(self);
+    if (!(0 <= j && j < N)) {
+        PyErr_SetString(PyExc_IndexError, "Vector index out of range");
+        return NULL;
+    }
+    TagInt *vec = Vector_get_vec(self);
+    return TagInt_to_object(vec[j]);
+}
+
+static int
+Vector_sq_ass_item(PyObject *self, Py_ssize_t j, PyObject *xo)
+{
+    Py_ssize_t N = Py_SIZE(self);
+    if (!(0 <= j && j < N)) {
+        PyErr_SetString(PyExc_IndexError, "Vector index out of range");
+        return -1;
+    }
+    TagInt t;
+    Py_INCREF(xo);
+    if (object_to_TagInt_steal(xo, &t)) {
+        Py_DECREF(xo);
+        return -1;
+    }
+    TagInt *vec = Vector_get_vec(self);
+    destroy_TagInt(&vec[j]);
+    vec[j] = t;
+    return 0;
+}
+
 static void
 Vector_clear(PyObject *self)
 {
@@ -1210,6 +1248,12 @@ static PyNumberMethods Vector_as_number = {
     .nb_negative = Vector_negative,
 };
 
+static PySequenceMethods Vector_as_sequence = {
+    .sq_length = Vector_sq_length,
+    .sq_item = Vector_sq_item,
+    .sq_ass_item = Vector_sq_ass_item,
+};
+
 static PyTypeObject Vector_Type = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "mutable_lattice.Vector",
@@ -1221,6 +1265,7 @@ static PyTypeObject Vector_Type = {
     .tp_dealloc = (destructor)Vector_dealloc,
     .tp_methods = Vector_methods,
     .tp_as_number = &Vector_as_number,
+    .tp_as_sequence = &Vector_as_sequence,
     .tp_richcompare = Vector_richcompare,
     .tp_str = Vector_str,
     .tp_repr = Vector_repr,

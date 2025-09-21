@@ -227,6 +227,45 @@ class TestVector(unittest.TestCase):
         with self.assertRaises(TypeError): v < w
         with self.assertRaises(TypeError): v <= w
 
+    def test_length(self):
+        self.assertEqual(len(Vector([])), 0)
+        self.assertEqual(len(Vector([10])), 1)
+        self.assertEqual(len(Vector([10, 20, 30])), 3)
+
+    def test_getitem(self):
+        self.assertEqual(Vector([0, 10, 20, 30])[2], 20)
+        self.assertEqual(Vector([0, 10, 20, 30])[-2], 20)
+
+    def test_iter(self):
+        data = [10, 20, 30]
+        self.assertEqual([x for x in Vector(data)], data)
+
+    def test_length(self):
+        self.assertEqual(len(Vector([])), 0)
+        self.assertEqual(len(Vector([10])), 1)
+        self.assertEqual(len(Vector([10, 20, 30])), 3)
+
+    def test_setitem_simple(self):
+        v = Vector([10, 20, 30])
+        v[1] = 999
+        self.assertEqual(v.tolist(), [10, 999, 30])
+
+    def test_setitem_random(self):
+        old = Vector(self.VALUES)
+        new = Vector(self.VALUES)
+        perm = list(range(len(self.VALUES)))
+        random.shuffle(perm)
+        for i in range(len(self.VALUES)):
+            new[i] = old[perm[i]]
+        self.assertEqual(new.tolist(), [old[perm_i] for perm_i in perm])
+
+    def test_sequence_errors(self):
+        v = Vector([1, 2, 3])
+        with self.assertRaises(IndexError): v[4]
+        with self.assertRaises(IndexError): v[4] = 5
+        with self.assertRaises(TypeError): v[None] = 5
+        with self.assertRaises(TypeError): v[0] = None
+
     def test_shuffled_by_action_onearg(self):
         self.assertEqual(
             Vector([0, 10, 20, 30]).shuffled_by_action(Vector([1, 0, 3, 2])).tolist(),
