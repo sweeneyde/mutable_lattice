@@ -2,9 +2,7 @@ import unittest
 import itertools
 import random
 import math
-from array import array
 import sys
-array_typecode = {2**31-1: 'i', 2**63-1: 'q'}[sys.maxsize]
 
 from . import (
     Vector,
@@ -228,6 +226,61 @@ class TestVector(unittest.TestCase):
         with self.assertRaises(TypeError): v < w
         with self.assertRaises(TypeError): v <= w
 
+    def test_shuffled_by_action_onearg(self):
+        self.assertEqual(
+            Vector([0, 10, 20, 30]).shuffled_by_action(Vector([1, 0, 3, 2])).tolist(),
+            [10, 0, 30, 20],
+        )
+        VALUES = self.VALUES
+        for N in [0, 1, 2, 3, 4, 5, 10, 20]:
+            for _ in range(100):
+                data = random.choices(VALUES, k=N)
+                a = random.choices(range(N), k=N)
+                expected = [0] * N
+                for i, ai in enumerate(a):
+                    expected[ai] += data[i]
+                self.assertEqual(Vector(data).shuffled_by_action(Vector(a)).tolist(), expected)
+
+    def test_shuffled_by_action_twoargs(self):
+        self.assertEqual(
+            Vector([100, 200, 300]).shuffled_by_action(Vector([0, 0, 0]), 1).tolist(),
+            [600],
+        )
+        self.assertEqual(
+            Vector([100, 200, 300, 400]).shuffled_by_action(Vector([1, 0, 1, 0]), 5).tolist(),
+            [600, 400, 0, 0, 0],
+        )
+        VALUES = self.VALUES
+        for N in range(5):
+            for result_N in range(1, 5):
+                with self.subTest(N=N, result_N=result_N):
+                    for _ in range(10):
+                        data = random.choices(VALUES, k=N)
+                        a = random.choices(range(result_N), k=N)
+                        expected = [0] * result_N
+                        for i, ai in enumerate(a):
+                            expected[ai] += data[i]
+                        self.assertEqual(Vector(data).shuffled_by_action(Vector(a), result_N).tolist(), expected)
+        self.assertEqual(Vector([]).shuffled_by_action(Vector([]), 0).tolist(), [])
+
+    def test_shuffled_by_action_errors(self):
+        v = Vector([0, 10, 20, 30])
+        with self.assertRaisesRegex(TypeError, "takes 1 or 2 arguments"):
+            v.shuffled_by_action()
+        with self.assertRaisesRegex(TypeError, "first argument must be another Vector"):
+            v.shuffled_by_action([0, 0, 0, 0])
+        with self.assertRaisesRegex(TypeError, "second argument must be an int if present"):
+            v.shuffled_by_action(Vector([0, 1, 2, 3]), 1.0)
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            v.shuffled_by_action(Vector([0, 0]))
+        with self.assertRaisesRegex(IndexError, "shuffle out of bounds"):
+            v.shuffled_by_action(Vector([0, 4, 0, 0]))
+        with self.assertRaisesRegex(IndexError, "shuffle out of bounds"):
+            v.shuffled_by_action(Vector([0, 1, 2, 3]), 2)
+        with self.assertRaisesRegex(IndexError, "shuffle out of bounds \(got a big integer\)"):
+            v.shuffled_by_action(Vector([0, 2**100, 0, 0]))
+
+
 class TestRowOps(unittest.TestCase):
     def setUp(self):
         self.VALUES = make_some_values()
@@ -313,34 +366,6 @@ class TestRowOps(unittest.TestCase):
             xgcd(1, 2, 3)
         with self.assertRaisesRegex(TypeError, "must be integers"):
             xgcd(1.0, 2.0)
-
-    def test_shuffled_by_array(self):
-        random.seed(0)
-        VALUES = list(self.VALUES)
-        for N in [0, 1, 2, 3, 4, 5, 10, 20]:
-            for _ in range(100):
-                data = random.choices(VALUES, k=N)
-                a = array(array_typecode, random.choices(range(N), k=N))
-                expected = [0] * N
-                for i, ai in enumerate(a):
-                    expected[ai] += data[i]
-                self.assertEqual(Vector(data).shuffled_by_array(a).tolist(), expected)
-
-    def test_shuffled_by_array_errors(self):
-        v = Vector([0, 10, 20, 30])
-        self.assertEqual(
-            v.shuffled_by_array(array(array_typecode, [1, 0, 3, 2])).tolist(),
-            [10, 0, 30, 20],
-        )
-        with self.assertRaisesRegex(IndexError, "shuffle out of bounds"):
-            v.shuffled_by_array(array(array_typecode, [0, 4, 0, 0]))
-        with self.assertRaisesRegex(ValueError, "length mismatch"):
-            v.shuffled_by_array(array(array_typecode, [0, 0]))
-        with self.assertRaisesRegex(TypeError, "must have word-sized integers"):
-            v.shuffled_by_array(array('b', [0, 0, 0, 0]))
-        twoD = memoryview(array(array_typecode, [1, 0, 3, 2])).cast('b').cast(array_typecode, shape=(2,2))
-        with self.assertRaisesRegex(ValueError, "must be 1D"):
-            v.shuffled_by_array(twoD)
 
 
 class LatticeTests:
@@ -725,6 +750,11 @@ class LatticeTests:
                             self.assertIn(basis[ii][j], range(pivot))
 
     def test_invariants(self):
+        L = Lattice(2, HNF_policy=self.HNF_POLICY)
+        L.add_vector(Vector([2, 1]))
+        L.add_vector(Vector([0, 2]))
+        self.assertEqual(L.invariants(), [1, 4])
+
         # From Arne Storjohann (1998).
         # "Computing Hermite and Smith normal forms of triangular integer matrices"
         L = Lattice(5, HNF_policy=self.HNF_POLICY)

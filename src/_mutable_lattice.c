@@ -627,9 +627,9 @@ Vector_dealloc(PyObject *self)
 }
 
 static PyObject *
-Vector_zero_impl(PyTypeObject *type, Py_ssize_t n)
+Vector_zero_impl(Py_ssize_t n)
 {
-    return type->tp_alloc(type, n);
+    return PyType_GenericAlloc(&Vector_Type, n);
 }
 
 static PyObject *
@@ -643,7 +643,7 @@ Vector_zero(PyTypeObject *type, PyObject *n_obj)
         PyErr_SetString(PyExc_ValueError, "Vector.zero() argument must be nonnegative");
         return NULL;
     }
-    return Vector_zero_impl(type, n);
+    return Vector_zero_impl(n);
 }
 
 static PyObject *
@@ -692,7 +692,7 @@ Vector_new(PyTypeObject *Py_UNUSED(type), PyObject *args, PyObject *kwds)
 static PyObject *
 Vector_from_TagInts(TagInt *t, Py_ssize_t N)
 {
-    PyObject *result = Vector_zero_impl(&Vector_Type, N);
+    PyObject *result = Vector_zero_impl(N);
     if (result == NULL) {
         return NULL;
     }
@@ -989,55 +989,72 @@ Vector__num_bigints(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyObject *
-Vector_shuffled_by_array(PyObject *self, PyObject *other)
+Vector_shuffled_by_action_impl(PyObject *self, PyObject *other, Py_ssize_t result_N)
 {
-    assert(Py_TYPE(self) == &Vector_Type);
-    Py_ssize_t N = Py_SIZE(self);
-    PyObject *result = NULL;
-    Py_buffer a;
-    if (PyObject_GetBuffer(other, &a, PyBUF_ND) < 0) {
+    PyObject *result = Vector_zero_impl(result_N);
+    if (result == NULL) {
         return NULL;
     }
-    if (a.ndim != 1) {
-        PyErr_SetString(PyExc_ValueError, "array must be 1D");
-        goto error;
-    }
-    if (a.shape[0] != N) {
-        PyErr_SetString(PyExc_ValueError, "length mismatch in v.shuffled_by_array");
-        goto error;
-    }
-    if (a.itemsize != sizeof(Py_ssize_t)) {
-        PyErr_SetString(PyExc_TypeError, "array must have word-sized integers");
-        goto error;
-    }
-    Py_ssize_t *buf = a.buf;
-    result = Vector_zero_impl(Py_TYPE(self), N);
-    if (result == NULL) {
-        goto error;
-    }
+    Py_ssize_t N = Py_SIZE(other);
     TagInt *source = Vector_get_vec(self);
     TagInt *dest = Vector_get_vec(result);
+    TagInt *action = Vector_get_vec(other);
     for (Py_ssize_t j = 0; j < N; j++) {
         if (!TagInt_is_zero(source[j])) {
-            Py_ssize_t bj = buf[j];
-            if (!(0 <= bj && bj < N)) {
+            TagInt ajt = action[j];
+            if (TagInt_is_pointer(ajt)) {
+                PyErr_SetString(PyExc_IndexError, "shuffle out of bounds (got a big integer)");
+                goto error;
+            }
+            intptr_t aj = unpack_integer(ajt);
+            if (!(0 <= aj && aj < result_N)) {
                 PyErr_SetString(PyExc_IndexError, "shuffle out of bounds");
                 goto error;
             }
             TagInt t;
-            if (TagInt_add(dest[bj], source[j], &t)) {
+            if (TagInt_add(dest[aj], source[j], &t)) {
                 goto error;
             }
-            destroy_TagInt(&dest[bj]);
-            dest[bj] = t;
+            destroy_TagInt(&dest[aj]);
+            dest[aj] = t;
         }
     }
-    PyBuffer_Release(&a);
     return result;
 error:
-    Py_XDECREF(result);
-    PyBuffer_Release(&a);
+    Py_DECREF(result);
     return NULL;
+}
+
+static PyObject *
+Vector_shuffled_by_action(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+{
+    assert(Py_TYPE(self) == &Vector_Type);
+    Py_ssize_t result_N;
+    if (nargs == 1) {
+        result_N = Py_SIZE(self);
+    } else if (nargs == 2) {
+        if (!PyLong_CheckExact(args[1])) {
+            PyErr_SetString(PyExc_TypeError, "v.shuffled_by_action(w, result_length) second argument must be an int if present");
+            return NULL;
+        }
+        result_N = PyLong_AsSsize_t(args[1]);
+        if (result_N == -1 && PyErr_Occurred()) {
+            return NULL;
+        }
+    } else {
+        PyErr_SetString(PyExc_TypeError, "v.shuffled_by_action(w[, result_length]) takes 1 or 2 arguments");
+        return NULL;
+    }
+    PyObject *other = args[0];
+    if (Py_TYPE(other) != &Vector_Type) {
+        PyErr_SetString(PyExc_TypeError, "v.shuffled_by_action(w) first argument must be another Vector");
+        return NULL;
+    }
+    if (Py_SIZE(other) != Py_SIZE(self)) {
+        PyErr_SetString(PyExc_ValueError, "v.shuffled_by_action(w) length mismatch");
+        return NULL;
+    }
+    return Vector_shuffled_by_action_impl(self, other, result_N);
 }
 
 static PyObject *
@@ -1178,8 +1195,8 @@ static PyMethodDef Vector_methods[] = {
         "Make a zero Vector of the given size"},
     {"_num_bigints", (PyCFunction)Vector__num_bigints, METH_NOARGS,
         "Count the number of boxed integers in this Vector"},
-    {"shuffled_by_array", (PyCFunction)Vector_shuffled_by_array, METH_O,
-        "v.shuffled_by_array(b) does for each i: result[b[i]] += v[i]"},
+    {"shuffled_by_action", (PyCFunction)(void(*)(void))Vector_shuffled_by_action, METH_FASTCALL,
+        "v.shuffled_by_action(b) does for each i: result[b[i]] += v[i]"},
     {NULL}
 };
 
@@ -2179,7 +2196,7 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         PyErr_SetString(PyExc_ValueError, "L.coefficients_of(v) argument length mismatch");
         return NULL;
     }
-    PyObject *result = Vector_zero_impl(&Vector_Type, L->rank);
+    PyObject *result = Vector_zero_impl(L->rank);
     if (result == NULL) {
         return NULL;
     }
@@ -2269,7 +2286,7 @@ Lattice_linear_combination(PyObject *self, PyObject *other)
         return NULL;
     }
     TagInt *coefficients = Vector_get_vec(other);
-    PyObject *result = Vector_zero_impl(&Vector_Type, N);
+    PyObject *result = Vector_zero_impl(N);
     if (result == NULL) {
         return result;
     }
@@ -2924,7 +2941,6 @@ make_pivots_positive(Lattice *L)
         TagInt *row = L->basis[i];
         Py_ssize_t j = L->row_to_pivot[i];
         TagInt pivot = row[j];
-        // printf("making pivot [%ld/%ld,%ld]=%ld positive\n", i, L->rank, j, N, row[j].bits/2);
         assert(!TagInt_is_zero(pivot));
         int neg = TagInt_is_negative(pivot, zero);
         if (neg == -1) {
@@ -2935,7 +2951,6 @@ make_pivots_positive(Lattice *L)
                 goto error;
             }
         }
-        // printf("made pivot [%ld/%ld,%ld]=%ld positive\n", i, L->rank, j, N, row[j].bits/2);
     }
     return false;
 error:
@@ -3458,7 +3473,7 @@ relations_among(PyObject *mod, PyObject *arg)
             }
         }
     }
-    if (N > PY_SSIZE_T_MAX - R || N + R > PY_SSIZE_T_MAX/sizeof(TagInt *)) {
+    if (N > PY_SSIZE_T_MAX - R || (size_t)N + (size_t)R > PY_SSIZE_T_MAX/sizeof(TagInt *)) {
         PyErr_SetNone(PyExc_OverflowError);
         return NULL;
     }
@@ -3500,7 +3515,7 @@ relations_among(PyObject *mod, PyObject *arg)
         }
     }
     Py_DECREF(L);
-    return result;
+    return (PyObject *)result;
 }
 
 /*********************************************************************/
