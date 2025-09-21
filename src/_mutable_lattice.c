@@ -3518,6 +3518,66 @@ relations_among(PyObject *mod, PyObject *arg)
     return (PyObject *)result;
 }
 
+static PyObject *
+transpose(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "transpose(N, [v1, ..., vk]) takes 2 arguments");
+        return NULL;
+    }
+    if (!PyLong_CheckExact(args[0])) {
+        PyErr_SetString(PyExc_TypeError, "transpose(N, [v1, ..., vk]) first argument must be integer");
+        return NULL;
+    }
+    Py_ssize_t N = PyLong_AsSsize_t(args[0]);
+    if (N == -1 && PyErr_Occurred()) {
+        return NULL;
+    }
+    if (N < 0) {
+        PyErr_SetString(PyExc_ValueError, "transpose(N, [v1, ..., vk]) first argument cannot be negative");
+        return NULL;
+    }
+    PyObject *data = args[1];
+    if (!PyList_CheckExact(data)) {
+        PyErr_SetString(PyExc_TypeError, "transpose(N, [v1, ..., vk]) second argument must be list");
+        return NULL;
+    }
+    Py_ssize_t R = PyList_GET_SIZE(data);
+    PyObject *result = PyList_New(N);
+    if (result == NULL) {
+        return NULL;
+    }
+    for (Py_ssize_t j = 0; j < N; j++) {
+        PyObject *result_vec = Vector_zero_impl(R);
+        if (result_vec == NULL) {
+            Py_DECREF(result);
+            return NULL;
+        }
+        assert(PyList_Check(result));
+        PyList_SET_ITEM(result, j, result_vec);
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        assert(PyList_Check(data));
+        PyObject *v = PyList_GET_ITEM(data, i);
+        if (Py_TYPE(v) != &Vector_Type) {
+            PyErr_SetString(PyExc_TypeError, "transpose(N, [v1, ..., vk]) second argument must be list of Vectors");
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (Py_SIZE(v) != N) {
+            PyErr_SetString(PyExc_ValueError, "transpose(N, [v1, ..., vk]) vectors must have length N");
+            Py_DECREF(result);
+            return NULL;
+        }
+        TagInt *vec = Vector_get_vec(v);
+        for (Py_ssize_t j = 0; j < N; j++) {
+            assert(PyList_Check(result));
+            Vector_get_vec(PyList_GET_ITEM(result, j))[i] = TagInt_copy(vec[j]);
+        }
+    }
+    return result;
+}
+
 /*********************************************************************/
 /* Module stuff                                                      */
 /*********************************************************************/
@@ -3555,6 +3615,8 @@ static PyMethodDef mutable_lattice_methods[] = {
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
     {"relations_among", relations_among, METH_O,
      "relations_among([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
+    {"transpose", (PyCFunction)(void(*)(void))transpose, METH_FASTCALL,
+     "transpose(N, [v0, ..., vk]) transposes a length-k list of legth-N vectors into a length-N list of length-k vectors"},
     {NULL, NULL, 0, NULL}   /* sentinel */
 };
 

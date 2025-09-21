@@ -11,6 +11,7 @@ from . import (
     Lattice,
     xgcd,
     relations_among,
+    transpose,
 )
 from .pylattice import PyLattice
 
@@ -1224,6 +1225,13 @@ class TestLatticeAPI(unittest.TestCase):
             L1 < L2
 
 class TestKernels(unittest.TestCase):
+    def setUp(self):
+        self.VALUES = make_some_values()
+
+    def tearDown(self):
+        self.VALUES.clear()
+        del self.VALUES
+
     def test_relations_among(self):
         self.assertEqual(
             relations_among([Vector([10]*100), Vector([20]*100)]),
@@ -1269,7 +1277,7 @@ class TestKernels(unittest.TestCase):
     def test_relations_among_random(self):
         for values in [
             [-2, -1, 0, 0, 0, 0, 1, 2],
-            make_some_values(),
+            self.VALUES,
         ]:
             for N in range(5):
                 zero_N = Vector.zero(N)
@@ -1294,6 +1302,38 @@ class TestKernels(unittest.TestCase):
             relations_among([1, 2, 3])
         with self.assertRaisesRegex(ValueError, "length mismatch"):
             relations_among([Vector([1,2,3]), Vector([4,5,6,7])])
+
+    def test_transpose(self):
+        self.assertEqual(transpose(2, [Vector([1, 2]), Vector([3, 4])]), [Vector([1, 3]), Vector([2, 4])])
+        self.assertEqual(transpose(2, [Vector([2, 3]), Vector([20, 30]), Vector([200, 300])]),
+                         [Vector([2, 20, 200]), Vector([3, 30, 300])])
+        self.assertEqual(transpose(2, []), [Vector([]), Vector([])])
+
+    def test_transpose_random(self):
+        VALUES = self.VALUES
+        for a in range(5):
+            for b in range(5):
+                flat = random.choices(VALUES, k=a*b)
+                A = [Vector(flat[i*a:(i+1)*a]) for i in range(b)]
+                B = [Vector(flat[j::a]) for j in range(a)]
+                self.assertEqual(transpose(a, A), B)
+                self.assertEqual(transpose(b, B), A)
+
+    def test_transpose_errors(self):
+        with self.assertRaisesRegex(TypeError, "takes 2 arguments"):
+            transpose([Vector([1, 2]), Vector([3, 4])])
+        with self.assertRaisesRegex(TypeError, "first argument must be integer"):
+            transpose([Vector([1, 2]), Vector([3, 4])], 2)
+        with self.assertRaisesRegex(TypeError, "second argument must be list"):
+            transpose(2, (Vector([1, 2]), Vector([3, 4])))
+        with self.assertRaisesRegex(TypeError, "second argument must be list of Vectors"):
+            transpose(2, [[1, 2], [3, 4]])
+        with self.assertRaisesRegex(ValueError, "first argument cannot be negative"):
+            transpose(-2, [Vector([1, 2]), Vector([3, 4])])
+        with self.assertRaises(OverflowError):
+            transpose(2**100, [])
+        with self.assertRaisesRegex(ValueError, "vectors must have length N"):
+            transpose(3, [Vector([1, 2]), Vector([3, 4, 5])])
 
 if __name__ == "__main__":
     unittest.main(exit=False)

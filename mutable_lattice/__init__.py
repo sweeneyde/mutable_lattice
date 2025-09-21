@@ -5,4 +5,5 @@ from _mutable_lattice import (
     Lattice,
     xgcd,
     relations_among,
+    transpose,
 )
