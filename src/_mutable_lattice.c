@@ -249,6 +249,7 @@ unpack_integer(TagInt t)
 }
 
 #define TagInt_ONE ((TagInt) {.bits = 2})
+#define TagInt_ZERO ((TagInt) {.bits = 0})
 
 static inline bool
 TagInt_is_zero(TagInt t) {
@@ -296,10 +297,20 @@ TagInt_copy(TagInt t)
 }
 
 static inline void
-destroy_TagInt(TagInt *t)
+TagInt_clear(TagInt *t)
 {
     TagInt tt = *t;
     t->bits = 0;
+    if (TagInt_is_pointer(tt)) {
+        Py_DECREF(untag_pointer(tt));
+    }
+}
+
+static inline void
+TagInt_setref(TagInt *t, TagInt val)
+{
+    TagInt tt = *t;
+    t->bits = val.bits;
     if (TagInt_is_pointer(tt)) {
         Py_DECREF(untag_pointer(tt));
     }
@@ -348,6 +359,10 @@ static inline bool
 TagInt_add(TagInt a, TagInt b, TagInt *c)
 {
     if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
+        // Speed hack:
+        // pack(unpack(a) + unpack(b)).bits
+        // = 2*(a.bits/2 + b.bits/2)
+        // = a.bits + b.bits
         if (!intptr_add_overflow(a.bits, b.bits, &c->bits)) {
             return false;
         }
@@ -375,6 +390,8 @@ static inline bool
 TagInt_negative(TagInt a, TagInt *res)
 {
     if (!TagInt_is_pointer(a) && a.bits != INTPTR_MIN) {
+        // Speed hack:
+        // pack(-unpack(a)).bits = 2*(-(a.bits/2)) = -a.bits
         res->bits = -a.bits;
         return false;
     }
@@ -385,6 +402,10 @@ static inline int
 TagInt_is_negative(TagInt a, PyObject *zero)
 {
     if (!TagInt_is_pointer(a)) {
+        // Speed hack:
+        // unpack(a) < 0
+        // iff a.bits/2 < 0
+        // iff a.bits < 0
         return a.bits < 0;
     }
     return pylong_lt(untag_pointer(a), zero);
@@ -420,6 +441,10 @@ static inline bool
 TagInt_sub(TagInt a, TagInt b, TagInt *c)
 {
     if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
+        // Speed hack:
+        // pack(unpack(a) - unpack(b)).bits
+        // = 2*(a.bits/2 - b.bits/2)
+        // = a.bits - b.bits
         if (!intptr_sub_overflow(a.bits, b.bits, &c->bits)) {
             return false;
         }
@@ -434,7 +459,7 @@ TagInt_scale_with_objects(
     TagInt a, PyObject *m_obj, TagInt *c)
 {
     if (TagInt_is_zero(a)) {
-        (*c) = (TagInt){ .bits = 0};
+        (*c) = TagInt_ZERO;
         return false;
     }
     if (TagInt_is_one(a)) {
@@ -457,6 +482,10 @@ TagInt_scale(
     TagInt a, intptr_t m, PyObject *m_obj, TagInt *c)
 {
     if (!TagInt_is_pointer(a)) {
+        // Speed hack:
+        // pack(m*unpack(a))).bits
+        // = 2*(m*a.bits/2)
+        // = m*a.bits
         if (!intptr_mul_overflow(a.bits, m, &c->bits)) {
             return false;
         }
@@ -490,7 +519,7 @@ TagInt_row_op_with_objects(
     if (kv_plus_w_obj == NULL) {
         return true;
     }
-    destroy_TagInt(w);
+    TagInt_clear(w);
     return object_to_TagInt_steal(kv_plus_w_obj, w);
 }
 
@@ -530,7 +559,7 @@ TagInt_generalized_row_op_with_objects(
     PyObject *v_obj = NULL, *w_obj = NULL;
     PyObject *av = NULL, *bw = NULL, *av_bw = NULL;
     PyObject *cv = NULL, *dw = NULL, *cv_dw = NULL;
-    TagInt new_v = { .bits = 0 }, new_w = { .bits = 0 };
+    TagInt new_v = TagInt_ZERO, new_w = TagInt_ZERO;
 
     if (!(v_obj = TagInt_to_object(*v))) { goto error; }
     if (!(w_obj = TagInt_to_object(*w))) { goto error; }
@@ -544,10 +573,8 @@ TagInt_generalized_row_op_with_objects(
     if (object_to_TagInt_steal(Py_NewRef(av_bw), &new_v)) { goto error; }
     if (object_to_TagInt_steal(Py_NewRef(cv_dw), &new_w)) { goto error; }
 
-    destroy_TagInt(v);
-    destroy_TagInt(w);
-    *v = new_v;
-    *w = new_w;
+    TagInt_setref(v, new_v);
+    TagInt_setref(w, new_w);
 
     Py_DECREF(v_obj); Py_DECREF(w_obj);
     Py_DECREF(av); Py_DECREF(bw); Py_DECREF(av_bw);
@@ -558,7 +585,7 @@ error:
     Py_XDECREF(v_obj); Py_XDECREF(w_obj);
     Py_XDECREF(av); Py_XDECREF(bw); Py_XDECREF(av_bw);
     Py_XDECREF(cv); Py_XDECREF(dw); Py_XDECREF(cv_dw);
-    destroy_TagInt(&new_v); destroy_TagInt(&new_w);
+    TagInt_clear(&new_v); TagInt_clear(&new_w);
     return true;
 }
 
@@ -568,6 +595,11 @@ TagInt_generalized_row_op(
 {
     intptr_t av, bw, av_bw, cv, dw, cv_dw;
     if (TagInt_is_pointer(*v) || TagInt_is_pointer(*w)) { goto use_objects; }
+    // Speed hack:
+    // pack(a*unpack(v) + b*unpack(w)).bits
+    // = 2*(a*v/2 + b*v/2)
+    // = a*v.bits + b*w.bits
+    // And similar for c*v+d*w
     if (intptr_mul_overflow(abcd[0], v->bits, &av)) { goto use_objects; }
     if (intptr_mul_overflow(abcd[1], w->bits, &bw)) { goto use_objects; }
     if (intptr_mul_overflow(abcd[2], v->bits, &cv)) { goto use_objects; }
@@ -643,8 +675,7 @@ Vector_sq_ass_item(PyObject *self, Py_ssize_t j, PyObject *xo)
         return -1;
     }
     TagInt *vec = Vector_get_vec(self);
-    destroy_TagInt(&vec[j]);
-    vec[j] = t;
+    TagInt_setref(&vec[j], t);
     return 0;
 }
 
@@ -653,7 +684,7 @@ Vector_clear(PyObject *self)
 {
     TagInt *self_vec = Vector_get_vec(self);
     for (Py_ssize_t i = 0; i < Py_SIZE(self); i++) {
-        destroy_TagInt(&self_vec[i]);
+        TagInt_clear(&self_vec[i]);
     }
 }
 
@@ -665,23 +696,23 @@ Vector_dealloc(PyObject *self)
 }
 
 static PyObject *
-Vector_zero_impl(Py_ssize_t n)
+Vector_zero_impl(Py_ssize_t N)
 {
-    return PyType_GenericAlloc(&Vector_Type, n);
+    return PyType_GenericAlloc(&Vector_Type, N);
 }
 
 static PyObject *
 Vector_zero(PyTypeObject *type, PyObject *n_obj)
 {
-    Py_ssize_t n = PyLong_AsSsize_t(n_obj);
-    if (n == -1 && PyErr_Occurred()) {
+    Py_ssize_t N = PyLong_AsSsize_t(n_obj);
+    if (N == -1 && PyErr_Occurred()) {
         return NULL;
     }
-    if (n < 0) {
+    if (N < 0) {
         PyErr_SetString(PyExc_ValueError, "Vector.zero() argument must be nonnegative");
         return NULL;
     }
-    return Vector_zero_impl(n);
+    return Vector_zero_impl(N);
 }
 
 static PyObject *
@@ -749,9 +780,9 @@ Vector_copy(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static bool
-Vector_iadd_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t n)
+Vector_iadd_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t N)
 {
-    for (Py_ssize_t i = 0; i < n; i++) {
+    for (Py_ssize_t i = 0; i < N; i++) {
         if (TagInt_is_zero(other_vec[i])) {
             continue;
         }
@@ -759,8 +790,7 @@ Vector_iadd_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t n)
         if (TagInt_add(self_vec[i], other_vec[i], &t)) {
             return true;
         }
-        destroy_TagInt(&self_vec[i]);
-        self_vec[i] = t;
+        TagInt_setref(&self_vec[i], t);
     }
     return false;
 }
@@ -771,12 +801,12 @@ Vector_iadd(PyObject *self, PyObject *other)
     if (Py_TYPE(other) != &Vector_Type || Py_TYPE(self) != &Vector_Type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
-    Py_ssize_t n = Py_SIZE(self);
-    if (n != Py_SIZE(other)) {
+    Py_ssize_t N = Py_SIZE(self);
+    if (N != Py_SIZE(other)) {
         PyErr_SetString(PyExc_ValueError, "size mismatch for Vector addition");
         return NULL;
     }
-    if (Vector_iadd_impl(Vector_get_vec(self), Vector_get_vec(other), n)) {
+    if (Vector_iadd_impl(Vector_get_vec(self), Vector_get_vec(other), N)) {
         return NULL;
     }
     return Py_NewRef(self);
@@ -795,9 +825,9 @@ Vector_add(PyObject *self, PyObject *other)
 }
 
 static bool
-Vector_isub_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t n)
+Vector_isub_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t N)
 {
-    for (Py_ssize_t i = 0; i < n; i++) {
+    for (Py_ssize_t i = 0; i < N; i++) {
         if (TagInt_is_zero(other_vec[i])) {
             continue;
         }
@@ -805,8 +835,7 @@ Vector_isub_impl(TagInt *self_vec, TagInt *other_vec, Py_ssize_t n)
         if (TagInt_sub(self_vec[i], other_vec[i], &t)) {
             return true;
         }
-        destroy_TagInt(&self_vec[i]);
-        self_vec[i] = t;
+        TagInt_setref(&self_vec[i], t);
     }
     return false;
 }
@@ -817,12 +846,12 @@ Vector_isub(PyObject *self, PyObject *other)
     if (Py_TYPE(other) != &Vector_Type || Py_TYPE(self) != &Vector_Type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
-    Py_ssize_t n = Py_SIZE(self);
-    if (n != Py_SIZE(other)) {
+    Py_ssize_t N = Py_SIZE(self);
+    if (N != Py_SIZE(other)) {
         PyErr_SetString(PyExc_ValueError, "size mismatch for Vector subtraction");
         return NULL;
     }
-    if (Vector_isub_impl(Vector_get_vec(self), Vector_get_vec(other), n)) {
+    if (Vector_isub_impl(Vector_get_vec(self), Vector_get_vec(other), N)) {
         return NULL;
     }
     return Py_NewRef(self);
@@ -860,8 +889,7 @@ Vector_imul(PyObject *self, PyObject *other)
             if (TagInt_scale_with_objects(vec[i], other, &t)) {
                 return NULL;
             }
-            destroy_TagInt(&vec[i]);
-            vec[i] = t;
+            TagInt_setref(&vec[i], t);
         }
     } else if (k == 0) {
         Vector_clear(self);
@@ -876,8 +904,7 @@ Vector_imul(PyObject *self, PyObject *other)
             if (TagInt_scale(vec[i], k, other, &t)) {
                 return NULL;
             }
-            destroy_TagInt(&vec[i]);
-            vec[i] = t;
+            TagInt_setref(&vec[i], t);
         }
     }
     return Py_NewRef(self);
@@ -915,8 +942,7 @@ Vector_negate_impl(TagInt *vec, Py_ssize_t n)
             if (TagInt_negative(vec[j], &t)) {
                 return true;
             }
-            destroy_TagInt(&vec[j]);
-            vec[j] = t;
+            TagInt_setref(&vec[j], t);
         }
     }
     return false;
@@ -969,13 +995,13 @@ Vector_richcompare(PyObject *a, PyObject *b, int op)
     if (Py_TYPE(a) != &Vector_Type || Py_TYPE(b) != &Vector_Type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
-    Py_ssize_t n = Py_SIZE(a);
-    if (Py_SIZE(b) != n) {
+    Py_ssize_t N = Py_SIZE(a);
+    if (Py_SIZE(b) != N) {
         goto unequal;
     }
     TagInt *vec_a = Vector_get_vec(a);
     TagInt *vec_b = Vector_get_vec(b);
-    for (Py_ssize_t i = 0; i < n; i++) {
+    for (Py_ssize_t i = 0; i < N; i++) {
         TagInt a = vec_a[i], b = vec_b[i];
         if (a.bits != b.bits) {
             if (!TagInt_is_pointer(a) && !TagInt_is_pointer(b)) {
@@ -1053,8 +1079,7 @@ Vector_shuffled_by_action_impl(PyObject *self, PyObject *other, Py_ssize_t resul
             if (TagInt_add(dest[aj], source[j], &t)) {
                 goto error;
             }
-            destroy_TagInt(&dest[aj]);
-            dest[aj] = t;
+            TagInt_setref(&dest[aj], t);
         }
     }
     return result;
@@ -1654,7 +1679,7 @@ Lattice_pop_vector(Lattice *L, Py_ssize_t j0)
     Py_ssize_t N = L->N;
     TagInt *vec = (TagInt *)(L->buffer_for_tagints + N*L->rank);
     for (Py_ssize_t j = j0; j < N; j++) {
-        destroy_TagInt(&vec[j]);
+        TagInt_clear(&vec[j]);
     }
 }
 
@@ -1670,7 +1695,7 @@ Lattice_clear_impl(PyObject *self)
     TagInt *t = L->buffer_for_tagints;
     TagInt *data_end = t + N * R;
     for (; t < data_end; t++) {
-        destroy_TagInt(t);
+        TagInt_clear(t);
     }
     for (Py_ssize_t i = 0; i < N; i++) {
         L->zero_columns[i] = i;
@@ -2294,7 +2319,7 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
     for (Py_ssize_t j = 0; j < N; j++) {
         if (!TagInt_is_zero(vec[j])) {
             nonzero = true;
-            destroy_TagInt(&vec[j]);
+            TagInt_clear(&vec[j]);
         }
     }
     if (nonzero) {
