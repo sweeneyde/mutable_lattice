@@ -398,7 +398,7 @@ class TestRowOps(unittest.TestCase):
     def test_xgcd(self):
         for a, b in itertools.product(self.VALUES, repeat=2):
             x, y, g = xgcd(a, b)
-            self.assertEqual(abs(g), math.gcd(a, b))
+            self.assertEqual(g, math.gcd(a, b))
             self.assertEqual(x*a + y*b, g)
 
     def test_xgcd_errors(self):

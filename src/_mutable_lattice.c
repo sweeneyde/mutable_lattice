@@ -1489,6 +1489,19 @@ xgcd_using_objects(PyObject *a, PyObject *b, PyObject **result)
         Py_DECREF(y); y = y1; y1 = y2; y2 = NULL;
         Py_DECREF(g); g = g1; g1 = g2; g2 = NULL;
     }
+    int lt = pylong_lt(g, g1);
+    if (lt == -1) {
+        goto error;
+    }
+    if (lt) {
+        PyObject *neg;
+        if (!(neg = pylong_negative(g))) { goto error; }
+        Py_DECREF(g); g = neg;
+        if (!(neg = pylong_negative(x))) { goto error; }
+        Py_DECREF(x); x = neg;
+        if (!(neg = pylong_negative(y))) { goto error; }
+        Py_DECREF(y); y = neg;
+    }
     Py_DECREF(x1); Py_DECREF(y1); Py_DECREF(g1);
     result[0] = x; result[1] = y; result[2] = g;
     return false;
@@ -1564,13 +1577,19 @@ xgcd_using_intptr(intptr_t a, intptr_t b, intptr_t *result)
         y = y1; y1 = y2;
         g = g1; g1 = g2;
     }
+    assert(x != INTPTR_MIN);
+    assert(y != INTPTR_MIN);
+    assert(g != INTPTR_MIN);
     if (a_neg) {
-        assert(x != INTPTR_MIN);
         x = -x;
     }
     if (b_neg) {
-        assert(y != INTPTR_MIN);
         y = -y;
+    }
+    if (g < 0) {
+        x = -x;
+        y = -y;
+        g = -g;
     }
     result[0] = x;
     result[1] = y;
