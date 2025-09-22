@@ -619,8 +619,8 @@ use_objects:
             if (!(abcd_obj[i] = PyLong_FromIntptr(abcd[i]))) {
                 for (i = i - 1; i >= 0; i--) {
                     Py_CLEAR(abcd_obj[i]);
-                    return true;
                 }
+                return true;
             }
         }
     }
