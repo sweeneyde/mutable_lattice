@@ -528,6 +528,10 @@ TagInt_row_op(
     TagInt *v, TagInt *w, intptr_t k, PyObject **k_obj_cache)
 {
     if (!TagInt_is_pointer(*v) && !TagInt_is_pointer(*w)) {
+        // Speed hack:
+        // pack(unpack(w)+k*unpack(v)).bits
+        // = 2*(w/2 + k*v/2)
+        // = w + k*v
         intptr_t v2 = v->bits;
         intptr_t kv2;
         if (!intptr_mul_overflow(k, v2, &kv2)) {
@@ -2152,12 +2156,14 @@ Lattice_contains_loop(Lattice *L, TagInt *vec, Py_ssize_t j)
         TagInt *row = L->basis[i];
 #if USE_FAST_PATHS
         if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
-            intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+            intptr_t rowj = unpack_integer(row[j]);
+            intptr_t vecj = unpack_integer(vec[j]);
             assert(rowj != 0);
             assert(vecj != 0);
             if (vecj % rowj != 0) {
                 goto not_present;
             }
+            assert(vecj != INTPTR_MIN);
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
             PyObject *neg_q_obj = NULL;
@@ -2280,12 +2286,14 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         TagInt *row = L->basis[i];
 #if USE_FAST_PATHS
         if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
-            intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+            intptr_t rowj = unpack_integer(row[j]);
+            intptr_t vecj = unpack_integer(vec[j]);
             assert(rowj != 0);
             assert(vecj != 0);
             if (vecj % rowj != 0) {
                 goto not_present;
             }
+            assert(vecj != INTPTR_MIN);
             intptr_t q = vecj / rowj;
             if (!is_packable_int(q)) {
                 // Happends if vecj==INTPTR_MIN/2 and rowj==-1.
@@ -2459,9 +2467,12 @@ make_entry_zero(TagInt *vec, Lattice *L, Py_ssize_t i, Py_ssize_t j)
     TagInt *row = L->basis[i];
 #if USE_FAST_PATHS
     if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
-        intptr_t rowj = row[j].bits/2, vecj = vec[j].bits/2;
+        intptr_t rowj = unpack_integer(row[j]);
+        intptr_t vecj = unpack_integer(vec[j]);
         assert(rowj != 0);
         assert(vecj != 0);
+        assert(rowj != INTPTR_MIN);
+        assert(vecj != INTPTR_MIN);
         if (vecj % rowj == 0) {
             intptr_t q = vecj / rowj;
             intptr_t neg_q = -q;
@@ -3064,8 +3075,9 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
             }
 #if USE_FAST_PATHS
             if (!TagInt_is_pointer(above) && !TagInt_is_pointer(pivot)) {
-                assert(pivot.bits/2 > 0);
-                intptr_t p = pivot.bits/2, a = above.bits/2;
+                intptr_t p = unpack_integer(pivot);
+                assert(p > 0);
+                intptr_t a = unpack_integer(above);
                 intptr_t q = a / p;
                 if (a % p < 0) {
                     q -= 1; // floor division
@@ -3078,8 +3090,8 @@ Lattice_HNFify_impl(Lattice *L, Py_ssize_t first_row_to_fix)
                 }
                 Py_XDECREF(neg_q_obj);
                 assert(!TagInt_is_pointer(row_to_reduce[jj]));
-                assert(0 <= row_to_reduce[jj].bits/2);
-                assert(row_to_reduce[jj].bits/2 < p);
+                assert(0 <= unpack_integer(row_to_reduce[jj]));
+                assert(unpack_integer(row_to_reduce[jj]) < p);
                 continue;
             }
 #endif
@@ -3137,7 +3149,7 @@ Lattice_HNFify(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyObject *
-Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
+Lattice_unnormalized_nonzero_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     // Just find the entries of the diagonal
     // This function doesn't ensure they have all the right divisibility.
@@ -3172,7 +3184,6 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
         if (Lattice_HNFify_impl(L, 0)) {
             goto error;
         }
-        // printf("got done HNFifying\n");
         // detect if each pivot is alone in its row and column.
         // if so, add it to the result and forget about it.
         memset(delete_row, 0, L->rank);
@@ -3188,7 +3199,6 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
                 alone = alone && TagInt_is_zero(L->basis[i][jj]);
             }
             if (alone) {
-                // printf("yielding %lld\n", Vector_get_vec(L->basis[i])[j].bits/2);
                 PyObject *p = TagInt_to_object(L->basis[i][j]);
                 if (p == NULL) {
                     goto error;
@@ -3206,7 +3216,6 @@ Lattice_unnormalized_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
         if (next_L == NULL) {
             goto error;
         }
-        // printf("transposing to size %lld\n", Py_SIZE(next_L));
         for (Py_ssize_t j = 0; j < L->N; j++) {
             if (delete_col[j]) {
                 continue;
@@ -3243,22 +3252,18 @@ error:
 }
 
 static PyObject *
-Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
+Lattice_nonzero_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *mathmodule = NULL;
     PyObject *result = NULL;
     PyObject *gcdfunc = NULL;
-    PyObject *zero = NULL;
     if (!(mathmodule = PyImport_ImportModule("math"))) {
         goto error;
     }
     if (!(gcdfunc = PyObject_GetAttrString(mathmodule, "gcd"))) {
         goto error;
     }
-    if (!(result = Lattice_unnormalized_invariants(self, NULL))) {
-        goto error;
-    }
-    if (!(zero = PyLong_FromLong(0))) {
+    if (!(result = Lattice_unnormalized_nonzero_invariants(self, NULL))) {
         goto error;
     }
     // "comb sort" but instead of swapping,
@@ -3300,22 +3305,38 @@ Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
             sorted = false;
         }
     }
-    Py_ssize_t N = ((Lattice *)self)->N;
-    while (PyList_GET_SIZE(result) < N) {
-        if (PyList_Append(result, zero) < 0) {
-            goto error;
-        }
-    }
     Py_DECREF(mathmodule);
     Py_DECREF(gcdfunc);
-    Py_DECREF(zero);
     return result;
 error:
     Py_XDECREF(mathmodule);
     Py_XDECREF(gcdfunc);
     Py_XDECREF(result);
-    Py_XDECREF(zero);
     return NULL;
+}
+
+static PyObject *
+Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    PyObject *result = Lattice_nonzero_invariants(self, NULL);
+    if (result == NULL) {
+        return NULL;
+    }
+    PyObject *zero = PyLong_FromLong(0);
+    if (zero == NULL) {
+        Py_DECREF(result);
+        return NULL;
+    }
+    Py_ssize_t N = ((Lattice *)self)->N;
+    while (PyList_GET_SIZE(result) < N) {
+        if (PyList_Append(result, zero) < 0) {
+            Py_DECREF(result);
+            Py_DECREF(zero);
+            return NULL;
+        }
+    }
+    Py_DECREF(zero);
+    return result;
 }
 
 static PyObject *
@@ -3461,8 +3482,10 @@ static PyMethodDef Lattice_methods[] = {
      "Apply row operations to convert the stored basis to Hermite normal form (HNF)"},
     {"invariants", Lattice_invariants, METH_NOARGS,
      "L.invariants() returns a the list of integer invariants, ordered by divisibility, potentially including both 0s and 1s."},
-    {"_unnormalized_invariants", Lattice_unnormalized_invariants, METH_NOARGS,
-     "The same as L.invariants(), but exclude zeros and don't guarantee any divisibility."},
+    {"nonzero_invariants", Lattice_nonzero_invariants, METH_NOARGS,
+     "The same as L.invariants(), but exclude zeros."},
+    {"_unnormalized_nonzero_invariants", Lattice_unnormalized_nonzero_invariants, METH_NOARGS,
+     "The same as L.nonzero_invariants(), but don't guarantee any divisibility."},
     {"is_full", Lattice_is_full, METH_NOARGS,
      "Returns True iff the lattice is the entirety of Z^N"},
     {"full", Lattice_full, METH_O | METH_CLASS,

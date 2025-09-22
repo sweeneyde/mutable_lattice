@@ -317,7 +317,7 @@ class TestVector(unittest.TestCase):
             v.shuffled_by_action(Vector([0, 4, 0, 0]))
         with self.assertRaisesRegex(IndexError, "shuffle out of bounds"):
             v.shuffled_by_action(Vector([0, 1, 2, 3]), 2)
-        with self.assertRaisesRegex(IndexError, "shuffle out of bounds \(got a big integer\)"):
+        with self.assertRaisesRegex(IndexError, r"shuffle out of bounds \(got a big integer\)"):
             v.shuffled_by_action(Vector([0, 2**100, 0, 0]))
 
 
@@ -794,6 +794,7 @@ class LatticeTests:
         L.add_vector(Vector([2, 1]))
         L.add_vector(Vector([0, 2]))
         self.assertEqual(L.invariants(), [1, 4])
+        self.assertEqual(L.nonzero_invariants(), [1, 4])
 
         # From Arne Storjohann (1998).
         # "Computing Hermite and Smith normal forms of triangular integer matrices"
@@ -804,18 +805,21 @@ class LatticeTests:
         L.add_vector(Vector([0,      0,     0,  9456,  7080]))
         L.HNFify()
         self.assertEqual(L.invariants(), [1, 2, 6, 24, 0])
+        self.assertEqual(L.nonzero_invariants(), [1, 2, 6, 24])
 
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3, 0, 1]))
         L.add_vector(Vector([0, 1, 0]))
         self.assertEqual(L.invariants(), [1, 1, 0])
+        self.assertEqual(L.nonzero_invariants(), [1, 1])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([0, 1, 2]))
         L.add_vector(Vector([3, 4, 5]))
         L.add_vector(Vector([6, 7, 8]))
         self.assertEqual(L.invariants(), [1, 3, 0])
+        self.assertEqual(L.nonzero_invariants(), [1, 3])
 
         L = Lattice(4, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([3,4,5,6]))
@@ -823,12 +827,14 @@ class LatticeTests:
         L.add_vector(Vector([14,5,6,7]))
         L.add_vector(Vector([2,2,10,9]))
         self.assertEqual(L.invariants(), [1, 1, 1, 687])
+        self.assertEqual(L.nonzero_invariants(), [1, 1, 1, 687])
 
         L = Lattice(3, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1,5,7]))
         L.add_vector(Vector([3,6,9]))
         L.add_vector(Vector([0,1,2]))
         self.assertEqual(L.invariants(), [1, 1, 6])
+        self.assertEqual(L.nonzero_invariants(), [1, 1, 6])
 
     def test_invariants_random(self):
         VALUES = list(self.VALUES)
@@ -868,6 +874,39 @@ class LatticeTests:
             L.add_vector(A)
             L.add_vector(B)
             self.assertEqual(L.invariants(), expected)
+            self.assertEqual(L.nonzero_invariants(), [x for x in expected if x])
+
+    def test_error_after_corruption(self):
+        # To avoid unexpected results, raise an error if we've already encountered
+        # an error that might've corrupted the invariants of the Lattice.
+        L = Lattice(3, maxrank=1, HNF_policy=self.HNF_POLICY)
+        L.add_vector(Vector([2, 0, 0]))
+        with self.assertRaises(IndexError):
+            # should not be able to add any other vector
+            L.add_vector(Vector([1, 1, 0]))
+        self.assertEqual(str(L), "<corrupted Lattice>")
+        self.assertEqual(repr(L), "<corrupted Lattice>")
+        with self.assertRaises(RuntimeError): L.copy()
+        with self.assertRaises(RuntimeError): L.add_vector(Vector([1, 2, 3]))
+        with self.assertRaises(RuntimeError): L.get_basis()
+        with self.assertRaises(RuntimeError): L.tolist()
+        with self.assertRaises(RuntimeError): L._assert_consistent()
+        with self.assertRaises(RuntimeError): L.HNFify()
+        with self.assertRaises(RuntimeError): L.invariants()
+        with self.assertRaises(RuntimeError): L.nonzero_invariants()
+        with self.assertRaises(RuntimeError): L._unnormalized_nonzero_invariants()
+        with self.assertRaises(RuntimeError): L.__getnewargs_ex__()
+        with self.assertRaises(RuntimeError): L.coefficients_of(Vector([1, 1, 1]))
+        with self.assertRaises(RuntimeError): L.linear_combination(Vector([2]))
+        with self.assertRaises(RuntimeError): Vector([1, 2, 3]) in L
+        with self.assertRaises(RuntimeError): L + L
+        with self.assertRaises(RuntimeError): L += L
+        with self.assertRaises(RuntimeError): L <= L
+        with self.assertRaises(RuntimeError): L < Lattice(3)
+        with self.assertRaises(RuntimeError): L == Lattice(3)
+        # Make sure clearing resets the corruption state.
+        L.clear()
+        L.copy()
 
 
 class TestLatticeHNFPolicy0(LatticeTests, unittest.TestCase):
