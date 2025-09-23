@@ -2361,7 +2361,7 @@ error:
 not_present:
     Py_DECREF(result);
     Lattice_pop_vector(L, 0);
-    PyErr_SetString(PyExc_KeyError, "Vector not present in Lattice");
+    PyErr_SetString(PyExc_ValueError, "Vector not present in Lattice");
     return NULL;
 }
 

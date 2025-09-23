@@ -560,6 +560,52 @@ class LatticeTests:
                         "[0 1 0 1]\n"
                         "[0 0 2 2]")
 
+    def test_maxrank_raises(self):
+        L = Lattice(3, maxrank=0, HNF_policy=self.HNF_POLICY)
+        # should be able to add the zero vector
+        L.add_vector(Vector([0, 0, 0]))
+        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
+            # should not be able to add any other vector
+            L.add_vector(Vector([0, 5, 0]))
+        with self.assertRaises(RuntimeError):
+            # After any attempt, should cause errors
+            L.add_vector(Vector([0, 5, 0]))
+
+        L = Lattice(3, maxrank=1, HNF_policy=self.HNF_POLICY)
+        L.add_vector(Vector([2, 2, 2]))
+        L.add_vector(Vector([0, 0, 0]))
+        L.add_vector(Vector([4, 4, 4]))
+        L.add_vector(Vector([3, 3, 3]))
+        L.add_vector(Vector([3, 3, 3]))
+        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
+            L.add_vector(Vector([0, 5, 0]))
+        with self.assertRaises(RuntimeError):
+            L.add_vector(Vector([0, 5, 0]))
+
+        L = Lattice(3, maxrank=2, HNF_policy=self.HNF_POLICY)
+        L.add_vector(Vector([2, 0, 0]))
+        L.add_vector(Vector([0, 2, 0]))
+        L.add_vector(Vector([10, 200000000, 0]))
+        with self.assertRaises(IndexError):
+            L.add_vector(Vector([0, 0, 1]))
+        with self.assertRaises(RuntimeError):
+            L.add_vector(Vector([0, 0, 1]))
+
+        for N in range(5):
+            basis = [Vector([0]*i + [1] + [0]*(N-1-i)) for i in range(N)]
+            for maxrank in range(N+1):
+                L = Lattice(N, maxrank=maxrank, HNF_policy=self.HNF_POLICY)
+                for vec in basis[:maxrank]:
+                    L.add_vector(vec)
+                self.assertEqual(L.rank, maxrank)
+                if maxrank < N:
+                    with self.assertRaises(IndexError):
+                        L.add_vector(basis[maxrank])
+                    for vec in basis[maxrank:]:
+                        with self.assertRaises(RuntimeError):
+                            L.add_vector(vec)
+            self.assertEqual(Lattice(N, maxrank=N+5, HNF_policy=self.HNF_POLICY).maxrank, N)
+
     def test_hnf(self):
         L = Lattice(2, HNF_policy=self.HNF_POLICY)
         L.add_vector(Vector([1, 3]))
@@ -1014,52 +1060,6 @@ class TestLatticeAPI(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "list or Vector"):
             L = Lattice(3, [(1,2,3)])
 
-    def test_maxrank_raises(self):
-        L = Lattice(3, maxrank=0)
-        # should be able to add the zero vector
-        L.add_vector(Vector([0, 0, 0]))
-        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
-            # should not be able to add any other vector
-            L.add_vector(Vector([0, 5, 0]))
-        with self.assertRaises(RuntimeError):
-            # After any attempt, should cause errors
-            L.add_vector(Vector([0, 5, 0]))
-
-        L = Lattice(3, maxrank=1)
-        L.add_vector(Vector([2, 2, 2]))
-        L.add_vector(Vector([0, 0, 0]))
-        L.add_vector(Vector([4, 4, 4]))
-        L.add_vector(Vector([3, 3, 3]))
-        L.add_vector(Vector([3, 3, 3]))
-        with self.assertRaisesRegex(IndexError, "would exceed maxrank"):
-            L.add_vector(Vector([0, 5, 0]))
-        with self.assertRaises(RuntimeError):
-            L.add_vector(Vector([0, 5, 0]))
-
-        L = Lattice(3, maxrank=2)
-        L.add_vector(Vector([2, 0, 0]))
-        L.add_vector(Vector([0, 2, 0]))
-        L.add_vector(Vector([10, 200000000, 0]))
-        with self.assertRaises(IndexError):
-            L.add_vector(Vector([0, 0, 1]))
-        with self.assertRaises(RuntimeError):
-            L.add_vector(Vector([0, 0, 1]))
-
-        for N in range(5):
-            basis = [Vector([0]*i + [1] + [0]*(N-1-i)) for i in range(N)]
-            for maxrank in range(N+1):
-                L = Lattice(N, maxrank=maxrank)
-                for vec in basis[:maxrank]:
-                    L.add_vector(vec)
-                self.assertEqual(L.rank, maxrank)
-                if maxrank < N:
-                    with self.assertRaises(IndexError):
-                        L.add_vector(basis[maxrank])
-                    for vec in basis[maxrank:]:
-                        with self.assertRaises(RuntimeError):
-                            L.add_vector(vec)
-            self.assertEqual(Lattice(N, maxrank=N+5).maxrank, N)
-
     def test_is_full(self):
         for HNF_policy in [0, 1]:
             for N in range(5):
@@ -1209,7 +1209,7 @@ class TestLatticeAPI(unittest.TestCase):
         self.assertEqual(Lattice(2, [[2, 0], [0, 2]]).coefficients_of(Vector([2, 20])), Vector([1, 10]))
         self.assertEqual(Lattice(2, [[2, 0]]).coefficients_of(Vector([-2, 0])), Vector([-1]))
         self.assertEqual(Lattice(3, [[10, 10, 10], [0, 20, 20]]).coefficients_of(Vector([30, -10, -10])), Vector([3, -2]))
-        with self.assertRaisesRegex(KeyError, "Vector not present in Lattice"):
+        with self.assertRaisesRegex(ValueError, "Vector not present in Lattice"):
             Lattice(3, [[2, 0, 0], [0, 2, 0], [0, 0, 2]]).coefficients_of(Vector([2, 1, 0]))
 
     def test_coefficients_of_errors(self):
@@ -1261,7 +1261,7 @@ class TestLatticeAPI(unittest.TestCase):
     def test_lattice_add(self):
         L1 = Lattice(3, [[2, 2, 2]])
         L2 = Lattice(3, [[0, 1, 1]])
-        L3 += L1 + L2
+        L3 = L1 + L2
         L3.HNFify()
         self.assertEqual(L1, Lattice(3, [[2, 2, 2]]))
         self.assertEqual(L2, Lattice(3, [[0, 1, 1]]))
