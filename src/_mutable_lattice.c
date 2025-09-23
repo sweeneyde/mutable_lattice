@@ -80,7 +80,7 @@ pylong_repr(PyObject *x)
 static inline PyObject *
 PyLong_FromIntptr(intptr_t x)
 {
-    static_assert(sizeof(intptr_t) == sizeof(Py_ssize_t));
+    static_assert(sizeof(intptr_t) == sizeof(Py_ssize_t), "bad C type sizes");
     return PyLong_FromSsize_t(x);
 }
 
@@ -139,7 +139,7 @@ intptr_sub_overflow(intptr_t a, intptr_t b, intptr_t *res)
 static inline bool
 intptr_mul_overflow(intptr_t a, intptr_t b, intptr_t *res)
 {
-    static_assert(sizeof(uintptr_t) == sizeof(uint64_t));
+    static_assert(sizeof(uintptr_t) == sizeof(uint64_t), "bad C type sizes");
     intptr_t high_word = __mulh(a, b);
     uintptr_t low_word = ((uintptr_t)a) * ((uintptr_t)b);
     bool negative = (bool)(low_word >> 63);
@@ -223,7 +223,7 @@ TagInt_is_pointer(TagInt t)
 static inline TagInt
 _tag_pointer(PyObject *obj)
 {
-    static_assert(_Alignof(PyObject) % 2 == 0);
+    static_assert(_Alignof(PyObject) % 2 == 0, "bad C type alignment");
     assert((((intptr_t)(void *)obj) & 1) == 0);
     return (TagInt) { .bits = ((intptr_t)(void *)obj) | 1 };
 }
@@ -1613,6 +1613,7 @@ xgcd(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
     }
     PyObject *a_obj = args[0];
     PyObject *b_obj = args[1];
+    PyObject *result_objects[3];
     if (!PyLong_CheckExact(a_obj) || !PyLong_CheckExact(b_obj)) {
         PyErr_SetString(PyExc_TypeError, "xgcd(a, b) arguments must be integers.");
         return NULL;
@@ -1636,7 +1637,6 @@ xgcd(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
     xgcd_using_intptr(a, b, result_intptrs);
     return Py_BuildValue("nnn", result_intptrs[0], result_intptrs[1], result_intptrs[2]);
 use_objects:
-    PyObject *result_objects[3];
     if (xgcd_using_objects(a_obj, b_obj, result_objects)) {
         return NULL;
     }
@@ -1950,8 +1950,8 @@ Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 static PyObject *
 Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t maxrank)
 {
-    static_assert(sizeof(TagInt) == sizeof(void *));
-    static_assert(sizeof(Py_ssize_t) == sizeof(void *));
+    static_assert(sizeof(TagInt) == sizeof(void *), "bad C type sizes");
+    static_assert(sizeof(Py_ssize_t) == sizeof(void *), "bad C type sizes");
     // We need:
     //   3*N words for the Py_ssize_t data,
     // + N words for the basis
@@ -2310,6 +2310,7 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
             continue;
         }
         TagInt *row = L->basis[i];
+        PyObject *q_obj;
 #if USE_FAST_PATHS
         if (!TagInt_is_pointer(row[j]) && !TagInt_is_pointer(vec[j])) {
             intptr_t rowj = unpack_integer(row[j]);
@@ -2338,14 +2339,13 @@ Lattice_coefficients_of(PyObject *self, PyObject *other)
         }
 #endif
     slowpath:
-        PyObject *q;
-        switch (Lattice_nomutate_make_zero_at_entry_with_objects(&vec[j], &row[j], N-j, &q)) {
+        switch (Lattice_nomutate_make_zero_at_entry_with_objects(&vec[j], &row[j], N-j, &q_obj)) {
             case -1: goto error;
             case 0: goto not_present;
             case 1: break;
         }
         assert(TagInt_is_zero(vec[j]));
-        if (object_to_TagInt_steal(q, &result_vec[i])) {
+        if (object_to_TagInt_steal(q_obj, &result_vec[i])) {
             goto error;
         }
     }
