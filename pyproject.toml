@@ -7,7 +7,7 @@ test-command = "python -m mutable_lattice.test -v"
 
 [project]
 name = "mutable_lattice"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
   { name="Dennis Sweeney", email="sweeney.427@osu.edu" },
 ]
