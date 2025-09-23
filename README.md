@@ -1,4 +1,5 @@
-`mutable_lattice` is a Python package for integer linear algebra using mutable sublattices of Z^n.
+`mutable_lattice` is a Python package that implements fast membership testing and mutation
+for sublattices of an integral lattice Z^n, with miscellaneous other integer linear algebra features.
 
 # Installation
 
@@ -230,7 +231,7 @@ then `v in (L1 + L2)` if and only if we can write `v = v1 + v2` where `v1 in L1`
 Comparison methods such as `L1 < L2`, `L1 <= L2`, `L1 == L2` are also supported
 for detecting when one lattice is a subset of another.
 
-## The general `Lattice(n[, data][, maxrank=-1][, HNF_policy=1])` constructor
+## `Lattice(n, data=..., /, *, maxrank=-1, HNF_policy=1)`
 
 The `Lattice(n, data)` constructor creates a sublattice of `Z^n`
 and accepts an optional second positional `data` argument
@@ -356,7 +357,7 @@ the matrix with the `transpose(n, [v1, ..., vk])` function (which requires each 
 
 ```
 
-## `v.shuffled_by_action(a[, result_size])`
+## `v.shuffled_by_action(a, result_size=..., /)`
 
 It is occasionally useful to shuffle around the entries of a `Vector` by a permutation:
 
