@@ -5,6 +5,8 @@ class PyLattice:
     # The equivalent of mutable_lattice.Lattice, but
     # implemented entirely with Python lists.
 
+    # This will be slower than the C version, but is useful for comparison.
+
     __slots__ = ["N",
                  "basis",
                  "pivot_location_in_column",
@@ -89,7 +91,7 @@ class PyLattice:
                 for jj in range(j, N):
                     vec[jj] -= q * row[jj]
             else:
-                x, y, g = xgcd(a, b)
+                x, y, g = py_xgcd(a, b)
                 ag = a//g
                 mbg = -b//g
                 for jj in range(j, N):
@@ -99,7 +101,7 @@ class PyLattice:
                     vec[jj] = mbg*aa + ag*bb
 
 
-def xgcd(a, b):
+def py_xgcd(a, b):
     # Maintain the invariants:
     #          x * a +      y * b ==      g
     #     next_x * a + next_y * b == next_g
