@@ -35,11 +35,11 @@ True
 
 ```
 
-This behavior was originally implemented for constructing small projective resolutions
-from computing integral homology of finite monoids, but is useful for integer linear algebra
+This behavior was originally implemented to help construct small projective resolutions
+for computing integral homology of finite monoids, but is useful for integer linear algebra
 in general.
 
-There are more general integer linear algebra libraries included SageMath (including PARI, GAP, and IML),
+There are more general integer linear algebra libraries included in SageMath (including PARI, GAP, and IML),
 and some of these may be preferred, especially when matrix entries include large integers,
 but this `mutable_lattice` package specializes in fast `add_vector` and `__contains__` operations,
 and is especially fast with machine-word-sized integers.
@@ -77,7 +77,7 @@ Vector([1000000000000000000000, 2000000000000000000000, 3000000000000000000000])
 
 ```
 
-Access entries of a vector with the `__getitem__`, `tolist`, and `__iter__` methods:
+One can access entries of a vector with the `__getitem__`, `tolist`, and `__iter__` methods:
 
 ```pycon
 >>> v = Vector([10, 20, 30])
