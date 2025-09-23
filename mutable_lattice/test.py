@@ -495,7 +495,7 @@ class LatticeTests:
                             w = L.coefficients_of(v)
                             self.assertEqual(L.linear_combination(w), v)
                         else:
-                            with self.assertRaises(KeyError):
+                            with self.assertRaises(ValueError):
                                 L.coefficients_of(v)
 
     def test_against_pylattice(self):
@@ -1156,6 +1156,8 @@ class TestLatticeAPI(unittest.TestCase):
         Lattice(10_000_000, maxrank=3)
 
     def test_raises_memoryerror(self):
+        if sys.maxsize <= 10_000_000**2:
+            raise unittest.SkipTest()
         with self.assertRaises(MemoryError):
             Lattice(10_000_000)
 

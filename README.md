@@ -1,15 +1,15 @@
-`mutable_lattice` is a Python package for working with integer linear algebra with mutable sublattices of Z^n.
+`mutable_lattice` is a Python package for integer linear algebra using mutable sublattices of Z^n.
 
 # Installation
 
 Install this package with `python -m pip install mutable_lattice`.
 
-Run the test with `python -m mutable_lattice.tests`.
+Run the tests with `python -m mutable_lattice.tests`.
 
 # Demo
 
-The following constructs a sublattice of `Z^3`, adds some Vectors to it,
-then tests which Vectors are in the integer span of the previously added vectors.
+The following constructs a sublattice of `Z^3`, adds some vectors to it,
+then tests which vectors are in the integer span of the previously added vectors.
 
 ```pycon
 >>> from mutable_lattice import Vector, Lattice
@@ -112,6 +112,8 @@ Vector([4, 10, 4, 4, 4])
 Vector([0, 6, 0, 0, 0])
 
 ```
+
+`Vector.zero(n)` is equivalent to `Vector([0]*n)`.
 
 ## Efficient `Lattice`s of integer vectors: Overview
 
@@ -255,7 +257,8 @@ If you have a Lattice not stored in HNF then calling `L.HNFify()`
 will perform row operations to convert to HNF.
 
 The full lattice that contains every vector in `Z^n` can be constructed
-using the classmethod `Lattice.full(n)`.
+using the classmethod `Lattice.full(n)`. `L.is_full()`
+returns whether `L == Lattice.full(L.ambient_dimension)`.
 
 ## SNF invariants
 
@@ -352,3 +355,36 @@ the matrix with the `transpose(n, [v1, ..., vk])` function (which requires each 
 [ 0  0  0  1]
 
 ```
+
+## `v.shuffled_by_action(a[, result_size])`
+
+It is occasionally useful to shuffle around the entries of a `Vector` by a permutation:
+
+```pycon
+>>> perm = Vector([0, 2, 4, 1, 3])
+>>> Vector([0, 10, 20, 30, 40]).shuffled_by_action(perm)
+Vector([0, 30, 10, 40, 20])
+
+```
+
+Note that each entry `perm[i]` above specifies where the `i`th entry moves to after the shuffle.
+
+More generally, we can shuffle the entries of the `Vector`
+Using some function from `range(len(v))` to `range(result_size)`,
+represented as a "action" `Vector`.
+If `result_size` is not provided, it defaults to `len(v)`.
+If the has duplicate entries `a[j1] == a[j2] == ...`,
+then `v.shuffled_by_action(a)[a[j1]]` will be their sum `a[j1] + a[j2] + ...`,
+so each action `Vector` specifies a linear operation.
+
+```pycon
+>>> Vector([0, 10, 20, 30, 40]).shuffled_by_action(Vector([0, 1, 0, 1, 0]))
+Vector([60, 40, 0, 0, 0])
+>>> Vector([0, 10, 20, 30, 40]).shuffled_by_action(Vector([0, 1, 0, 1, 0]), 2)
+Vector([60, 40])
+
+```
+
+This package does not provide a built-in way of applying more general linear operations
+on `Vector`s via matrices, nor a way to multiply matrices, but these can be emulated
+using appropriate `Vector` addition and scaling.

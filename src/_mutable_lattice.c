@@ -5,6 +5,13 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifndef Py_READONLY
+# include <structmember.h>
+# define Py_READONLY READONLY
+# define Py_T_PYSSIZET T_PYSSIZET
+# define Py_T_INT T_INT
+#endif
+
 // This macro exists for the ease of testing the slow paths
 #define USE_FAST_PATHS 1
 
@@ -1263,7 +1270,7 @@ static PyMethodDef Vector_methods[] = {
     {"_num_bigints", (PyCFunction)Vector__num_bigints, METH_NOARGS,
         "Count the number of boxed integers in this Vector"},
     {"shuffled_by_action", (PyCFunction)(void(*)(void))Vector_shuffled_by_action, METH_FASTCALL,
-        "v.shuffled_by_action(b) does for each i: result[b[i]] += v[i]"},
+        "v.shuffled_by_action(a) does for each i: result[a[i]] += v[i]"},
     {NULL}
 };
 
@@ -3473,7 +3480,7 @@ Lattice___getnewargs_ex__(PyObject *self, PyObject *Py_UNUSED(ignored))
     if (tolist == NULL) {
         return NULL;
     }
-    return Py_BuildValue("(nN){snsn}",
+    return Py_BuildValue("(nN){sisn}",
         L->N, tolist,
         "HNF_policy", L->HNF_policy, "maxrank", L->maxrank);
 }
@@ -3519,11 +3526,16 @@ static PyMethodDef Lattice_methods[] = {
 };
 
 static PyMemberDef Lattice_members[] = {
-    {"ambient_dimension", Py_T_PYSSIZET, offsetof(Lattice, N), Py_READONLY},
-    {"maxrank", Py_T_PYSSIZET, offsetof(Lattice, maxrank), Py_READONLY},
-    {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY},
-    {"HNF_policy", Py_T_INT, offsetof(Lattice, HNF_policy), Py_READONLY},
-    {"_first_HNF_row", Py_T_PYSSIZET, offsetof(Lattice, first_HNF_row), Py_READONLY},
+    {"ambient_dimension", Py_T_PYSSIZET, offsetof(Lattice, N), Py_READONLY,
+     "the dimension N of the ambient lattice Z^N"},
+    {"maxrank", Py_T_PYSSIZET, offsetof(Lattice, maxrank), Py_READONLY,
+     "the maximum basis size this Lattice has room to store"},
+    {"rank", Py_T_PYSSIZET, offsetof(Lattice, rank), Py_READONLY,
+     "the number of Vectors in a basis for this Lattice"},
+    {"HNF_policy", Py_T_INT, offsetof(Lattice, HNF_policy), Py_READONLY,
+     "whether this Lattice automatically maintains Hermite normal form"},
+    {"_first_HNF_row", Py_T_PYSSIZET, offsetof(Lattice, first_HNF_row), Py_READONLY,
+     "the first vector in this Lattice that is already in Hermite normal form"},
     {NULL}
 };
 
@@ -3714,7 +3726,9 @@ mutable_lattice_module_exec(PyObject *m)
 
 static PyModuleDef_Slot mutable_lattice_module_slots[] = {
     {Py_mod_exec, mutable_lattice_module_exec},
+#ifdef Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED
     {Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED},
+#endif
     {0, NULL}
 };
 
@@ -3736,7 +3750,7 @@ static PyMethodDef mutable_lattice_methods[] = {
 static PyModuleDef mutable_lattice_module = {
     .m_base = PyModuleDef_HEAD_INIT,
     .m_name = "_mutable_lattice",
-    .m_doc = "Take spans of integer vectors.",
+    .m_doc = "integer linear algebra using mutable sublattices of Z^n",
     .m_size = 0,
     .m_slots = mutable_lattice_module_slots,
     .m_methods = mutable_lattice_methods,
