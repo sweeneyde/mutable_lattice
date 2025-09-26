@@ -1032,17 +1032,9 @@ Vector_richcompare(PyObject *a, PyObject *b, int op)
         }
     }
     // equal
-    if (op == Py_NE) {
-        Py_RETURN_FALSE;
-    } else {
-        Py_RETURN_TRUE;
-    }
+    return PyBool_FromLong(op == Py_EQ);
 unequal:
-    if (op == Py_NE) {
-        Py_RETURN_TRUE;
-    } else {
-        Py_RETURN_FALSE;
-    }
+    return PyBool_FromLong(op == Py_NE);
 }
 
 static Py_ssize_t
@@ -2849,6 +2841,7 @@ Lattice_add(PyObject *self, PyObject *other)
     if (Py_TYPE(self) != &Lattice_Type || Py_TYPE(other) != &Lattice_Type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
+    // TODO
     Lattice *L1 = (Lattice *)self;
     Lattice *L2 = (Lattice *)other;
     if (L1->N != L2->N) {
@@ -2962,14 +2955,14 @@ Lattice_richcompare(PyObject *a, PyObject *b, int op)
         if (le == -1) {
             return NULL;
         }
-        return Py_NewRef(le ? Py_True : Py_False);
+        return PyBool_FromLong(le);
     }
     if (op == Py_EQ || op == Py_NE) {
         int eq = Lattice_eq_impl(L1, L2);
         if (eq == -1) {
             return NULL;
         }
-        return Py_NewRef(eq ^ (op == Py_NE) ? Py_True : Py_False);
+        return PyBool_FromLong(eq ^ (op == Py_NE));
     }
     if (op == Py_LT || op == Py_GT) {
         if (op == Py_GT) {
@@ -2986,7 +2979,7 @@ Lattice_richcompare(PyObject *a, PyObject *b, int op)
         if (eq == -1) {
             return NULL;
         }
-        return Py_NewRef(eq ? Py_False : Py_True);
+        return PyBool_FromLong(!eq);
     }
     Py_RETURN_NOTIMPLEMENTED;
 }
