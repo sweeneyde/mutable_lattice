@@ -175,7 +175,7 @@ So `L.__str__()` is displaying a matrix of height `L.rank` and width `L.ambient_
 ```
 
 The `Lattice.__contains__(v)` method identifies whether the argument `Vector`
-is the `Lattice`, i.e., whether `v` is in the integer span of the stored basis:
+is in the `Lattice`, i.e., whether `v` is in the integer span of the stored basis:
 
 ```pycon
 >>> print(L) # Continuing from above
