@@ -2841,7 +2841,6 @@ Lattice_add(PyObject *self, PyObject *other)
     if (Py_TYPE(self) != &Lattice_Type || Py_TYPE(other) != &Lattice_Type) {
         Py_RETURN_NOTIMPLEMENTED;
     }
-    // TODO
     Lattice *L1 = (Lattice *)self;
     Lattice *L2 = (Lattice *)other;
     if (L1->N != L2->N) {
@@ -2857,14 +2856,22 @@ Lattice_add(PyObject *self, PyObject *other)
         L1 = L2;
         L2 = tmp;
     }
-    Lattice *L1_copy = (Lattice *)Lattice_copy((PyObject *)L1, NULL);
-    if (L1_copy == NULL) {
+    Py_ssize_t maxrank = L1->rank + L2->rank;
+    if (maxrank > L1->N) {
+        maxrank = L1->N;
+    }
+    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, L1->N, L1->HNF_policy, maxrank);
+    if (result == NULL) {
         return NULL;
     }
-    if (Lattice_inplace_add_impl(L1_copy, L2)) {
+    if (Lattice_inplace_add_impl(result, L1)) {
+        Py_DECREF(result);
         return NULL;
     }
-    return (PyObject *)L1_copy;
+    if (Lattice_inplace_add_impl(result, L2)) {
+        Py_DECREF(result);
+        return NULL;
+    }
 }
 
 static int
@@ -3359,6 +3366,83 @@ Lattice_invariants(PyObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyObject *
+Lattice_intersection(PyObject *self, PyObject *other)
+{
+    if (Py_TYPE(self) != &Lattice_Type || Py_TYPE(other) != &Lattice_Type) {
+        Py_RETURN_NOTIMPLEMENTED;
+    }
+    Lattice *L1 = (Lattice *)self;
+    Lattice *L2 = (Lattice *)other;
+    if (L1->N != L1->N) {
+        PyErr_SetString(PyExc_ValueError, "dimension mismatch for Lattice intersection");
+        return NULL;
+    }
+    Py_ssize_t N = L1->N;
+    // If L1, L2 is are lattices represented as a matrices of row vectors,
+    // Then row reduce the block matrix
+    //    [ L1 | L1 ]
+    //    [ L2 | 0  ]
+    // The result is then:
+    //    [ L1 + L2 |   ???   ]
+    //    [   0     | L1 & L2 ]
+    Py_ssize_t maxrank = L1->rank + L2->rank;
+    if (maxrank > 2*N) {
+        maxrank = 2*N;
+    }
+    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, 2*N, L1->HNF_policy, maxrank);
+    if (L == NULL) {
+        return NULL;
+    }
+    TagInt *scratch = PyMem_Malloc(2*N*sizeof(TagInt));
+    if (scratch == NULL) {
+        PyErr_NoMemory();
+        Py_DECREF(L);
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < L1->rank; i++) {
+        TagInt *row = L1->basis[i];
+        for (Py_ssize_t j = 0; j < N; j++) {
+            scratch[N + j] = scratch[j] = row[j];
+        }
+        if (Lattice_add_vector_impl(L, scratch)) {
+            PyMem_Free(scratch);
+            Py_DECREF(L);
+            return NULL;
+        }
+    }
+    memset(scratch + N, 0, sizeof(TagInt) * N);
+    for (Py_ssize_t i = 0; i < L2->rank; i++) {
+        TagInt *row = L2->basis[i];
+        memcpy(scratch, row, N * sizeof(TagInt));
+        if (Lattice_add_vector_impl(L, scratch)) {
+            PyMem_Free(scratch);
+            Py_DECREF(L);
+            return NULL;
+        }
+    }
+    PyMem_Free(scratch);
+    Py_ssize_t start = L->rank;
+    while (start > 0 && L->row_to_pivot[start - 1] >= N) {
+        start--;
+    }
+    assert(L->rank - start <= N);
+    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, N, L1->HNF_policy, L->rank - start);
+    if (result == NULL) {
+        Py_DECREF(L);
+        return NULL;
+    }
+    for (Py_ssize_t i = start; i < L->rank; i++) {
+        if (Lattice_add_vector_impl(result, &L->basis[i][N])) {
+            Py_DECREF(L);
+            Py_DECREF(result);
+            return NULL;
+        }
+    }
+    Py_DECREF(L);
+    return (PyObject *)result;
+}
+
+static PyObject *
 Lattice_repr(PyObject *self)
 {
     Lattice *L = (Lattice *)self;
@@ -3539,6 +3623,7 @@ static PySequenceMethods Lattice_as_sequence = {
 static PyNumberMethods Lattice_as_number = {
     .nb_inplace_add = Lattice_inplace_add,
     .nb_add = Lattice_add,
+    .nb_and = Lattice_intersection,
 };
 
 static PyTypeObject Lattice_Type = {

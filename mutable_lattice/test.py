@@ -1415,5 +1415,56 @@ class TestKernels(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vectors must have length N"):
             transpose(3, [Vector([1, 2]), Vector([3, 4, 5])])
 
+class TestIntersection(unittest.TestCase):
+    def test_intersection_simple(self):
+        A = Lattice(2, [[3, 0], [0, 3]])
+        B = Lattice(2, [[0, 1]])
+        self.assertEqual(A & B, Lattice(2, [[0, 3]]))
+        A = Lattice(1, [[12]])
+        B = Lattice(1, [[20]])
+        self.assertEqual(A & B, Lattice(1, [[60]]))
+        A = Lattice(2, [[1, 1]])
+        B = Lattice(2, [[0, 5], [2, 0]])
+        self.assertEqual(A & B, Lattice(2, [[10, 10]]))
+        A = Lattice(2, [[1, 1]])
+        B = Lattice(2, [[2, 3]])
+        self.assertEqual(A & B, Lattice(2))
+        # Based on https://github.com/sagemath/sage/blob/develop/src/sage/modules/free_module.py
+        A = Lattice(3, [[1, 1, 1], [1, 2, 3]])
+        B = Lattice(3, [[2, 2, 2], [1, 0, 0]])
+        self.assertEqual(A & B, Lattice(3, [[2, 2, 2]]))
+        A = Lattice(3, [[1, 0, 0], [1, 1, 0]])
+        B = Lattice(3, [[0, 1, 0], [0, 0, 1]])
+        self.assertEqual(A & B, Lattice(3, [[0, 1, 0]]))
+        A = Lattice.full(3)
+        B = Lattice(3, [[1, 0, 0], [1, 1, 0]])
+        self.assertEqual(A & B, B)
+
+    def test_intersection_exhaustive(self):
+        vectors = [Vector([x, y]) for x in range(-2, 3) for y in range(-2, 3)]
+        lattices = [Lattice(2, [v]) for v in vectors] + [Lattice(2, [v, w]) for v, w in itertools.combinations(vectors, 2)]
+        for A in lattices:
+            for B in lattices:
+                meet = A & B
+                join = A + B
+                self.assertEqual(meet.rank + join.rank, A.rank + B.rank)
+                self.assertLessEqual(meet, A)
+                self.assertLessEqual(meet, B)
+                for v in A.get_basis():
+                    if (v in B) != (v in meet):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+                for v in B.get_basis():
+                    if (v in A) != (v in meet):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+                for v in vectors:
+                    if (v in meet) != (v in A and v in B):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+
+    def test_maxrank_after_operations_is_minimal(self):
+        L = Lattice(10, maxrank=4) & Lattice(10, maxrank=3)
+        self.assertEqual(L.maxrank, 0)
+        L = Lattice.full(3) & Lattice(3, [[2, 2, 2]])
+        self.assertEqual(L.maxrank, 1)
+
 if __name__ == "__main__":
     unittest.main(exit=False)
