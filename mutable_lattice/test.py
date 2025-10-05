@@ -950,6 +950,7 @@ class LatticeTests:
         with self.assertRaises(RuntimeError): L <= L
         with self.assertRaises(RuntimeError): L < Lattice(3)
         with self.assertRaises(RuntimeError): L == Lattice(3)
+        with self.assertRaises(RuntimeError): L.decompose()
         # Make sure clearing resets the corruption state.
         L.clear()
         L.copy()
@@ -1465,6 +1466,114 @@ class TestIntersection(unittest.TestCase):
         self.assertEqual(L.maxrank, 0)
         L = Lattice.full(3) & Lattice(3, [[2, 2, 2]])
         self.assertEqual(L.maxrank, 1)
+
+    def test_errors(self):
+        A, B = Lattice(2), Lattice(5)
+        with self.assertRaisesRegex(ValueError, "dimension mismatch"):
+            A & B
+
+class TestDecompose(unittest.TestCase):
+    def test_noargs_simple(self):
+        self.assertEqual(
+            Lattice(2, [[3, 0], [0, 5]]).decompose(),
+            ([[0], [1]], [Lattice(1, [[3]]), Lattice(1, [[5]])])
+        )
+        self.assertEqual(
+            Lattice(2, [[1, 1], [0, 2]]).decompose(),
+            ([[0, 1]], [Lattice(2, [[1, 1], [0, 2]])])
+        )
+        self.assertEqual(
+            Lattice(3, [[1, 0, 1], [0, 5, 0], [0, 0, 2]]).decompose(),
+            ([[0, 2], [1]], [Lattice(2, [[1, 1], [0, 2]]), Lattice(1, [[5]])])
+        )
+        self.assertEqual(Lattice(0).decompose(), ([], []))
+        self.assertEqual(Lattice(1).decompose(), ([[0]], [Lattice(1)]))
+        self.assertEqual(Lattice(1, [[5]]).decompose(), ([[0]], [Lattice(1, [[5]])]))
+        self.assertEqual(
+            Lattice(10).decompose(),
+            ([[i] for i in range(10)], [Lattice(1, maxrank=0) for _ in range(10)])
+        )
+        self.assertEqual(
+            Lattice(5, [[0, 5, 0, 0, 0], [0, 0, 0, 6, 7]]).decompose(),
+            ([[0], [1], [2], [3, 4]], [Lattice(1), Lattice(1, [[5]]), Lattice(1), Lattice(2, [[6, 7]])])
+        )
+        self.assertEqual(
+            Lattice(4, [[0, 0, 200, -300]]).decompose(),
+            ([[0], [1], [2, 3]], [Lattice(1), Lattice(1), Lattice(2, [[200, -300]])])
+        )
+        self.assertEqual(
+            Lattice(10, [[0,1,0,0,0,0,0,0,0,1],
+                         [0,0,2,0,0,0,0,2,0,0],
+                         [0,0,0,3,0,0,0,0,0,1],
+                         [0,0,0,0,4,0,6,0,0,0],
+                         [0,0,0,0,0,5,0,0,0,0],
+                         [0,0,0,0,0,0,0,7,8,0]]).decompose(),
+            ([[0], [1, 3, 9], [2, 7, 8], [4, 6], [5]],
+             [Lattice(1),
+              Lattice(3, [[1, 0, 1], [0, 3, 1]]),
+              Lattice(3, [[2, 2, 0], [0, 7, 8]]),
+              Lattice(2, [[4, 6]]),
+              Lattice(1, [[5]]),])
+        )
+
+    def test_noargs_exhaustive(self):
+        vectors = list(map(Vector, map(list, itertools.product([-1, 0, 1, 2], repeat=4))))
+        lattices = (
+            [Lattice(4, maxrank=0), Lattice.full(4)]
+            + [Lattice(4, [v], maxrank=1) for v in vectors]
+            + [Lattice(4, [v, w], maxrank=2) for v, w in itertools.combinations(vectors, 2)]
+        )
+        for L in lattices:
+            indexes, summands = L.decompose()
+            self.assertEqual(len(indexes), len(summands))
+            self.assertEqual(sum(map(len, indexes)), 4)
+            self.assertEqual({x for arr in indexes for x in arr}, set(range(4)))
+            self.assertEqual(sum(summand.rank for summand in summands), L.rank)
+            self.assertEqual(sum(summand.ambient_dimension for summand in summands), L.ambient_dimension)
+            for summand in summands:
+                self.assertEqual(summand.maxrank, summand.rank)
+                self.assertEqual(summand.decompose(), ([list(range(summand.ambient_dimension))], [summand]))
+            reconstruction = Lattice(4)
+            for arr, summand in zip(indexes, summands):
+                self.assertEqual(summand.ambient_dimension, len(arr))
+                for vec0 in summand.get_basis():
+                    vec = Vector.zero(4)
+                    for i, x in enumerate(arr):
+                        vec[x] = vec0[i]
+                    reconstruction.add_vector(vec)
+            self.assertEqual(L, reconstruction)
+
+    def test_keeping_together(self):
+        L = Lattice(3, [[10, 0, 0], [0, 20, 0], [0, 0, 30]])
+        self.assertEqual(L.decompose([]),
+            ([[0], [1], [2]], [Lattice(1, [[10]]), Lattice(1, [[20]]), Lattice(1, [[30]])])
+        )
+        self.assertEqual(L.decompose([[0, 1]]),
+            ([[0, 1], [2]], [Lattice(2, [[10, 0], [0, 20]]), Lattice(1, [[30]])])
+        )
+        self.assertEqual(L.decompose([[0, 2]]),
+            ([[0, 2], [1]], [Lattice(2, [[10, 0], [0, 30]]), Lattice(1, [[20]])])
+        )
+        self.assertEqual(L.decompose([[0, 2], [2, 0], [0, 0, 0, 0, 2], [], [1, 1, 1], [1]]),
+            ([[0, 2], [1]], [Lattice(2, [[10, 0], [0, 30]]), Lattice(1, [[20]])])
+        )
+        self.assertEqual(L.decompose([[2, 1], [2, 0]]),
+            ([[0, 1, 2]], [Lattice(3, [[10, 0, 0], [0, 20, 0], [0, 0, 30]])])
+        )
+
+    def test_errors(self):
+        L = Lattice.full(3)
+        with self.assertRaisesRegex(TypeError, "takes 0 or 1 arguments"):
+            L.decompose(1, 2)
+        with self.assertRaisesRegex(TypeError, "iterable"):
+            L.decompose(1)
+        with self.assertRaisesRegex(TypeError, "iterable"):
+            L.decompose([1])
+        with self.assertRaisesRegex(TypeError, "indexes must be ints"):
+            L.decompose([[4.0]])
+        with self.assertRaisesRegex(IndexError, "index out of range"):
+            L.decompose([[3]])
+        self.assertEqual(L.decompose([[2]]), ([[0],[1],[2]], [Lattice.full(1)]*3))
 
 if __name__ == "__main__":
     unittest.main(exit=False)
