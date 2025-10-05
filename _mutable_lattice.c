@@ -2857,9 +2857,9 @@ Lattice_add(PyObject *self, PyObject *other)
         L2 = tmp;
     }
     Py_ssize_t maxrank = L1->rank + L2->rank;
-    if (maxrank > L1->N) {
-        maxrank = L1->N;
-    }
+    if (maxrank < L1->maxrank) { maxrank = L1->maxrank; }
+    if (maxrank < L2->maxrank) { maxrank = L2->maxrank; }
+    if (maxrank > L1->N) { maxrank = L1->N; }
     Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, L1->N, L1->HNF_policy, maxrank);
     if (result == NULL) {
         return NULL;

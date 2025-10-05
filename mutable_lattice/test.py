@@ -1276,6 +1276,18 @@ class TestLatticeAPI(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "length mismatch"):
             L1 + L2
 
+    def test_lattice_add_maxrank(self):
+        lattices = [
+            Lattice(4, [Vector([0]*i + [1] + [0] * (4-1-i)) for i in range(k)], maxrank=n)
+            for n in range(4 + 1)
+            for k in range(n + 1)
+        ]
+        for L1 in lattices:
+            for L2 in lattices:
+                L = L1 + L2
+                expected_maxrank = min(4, max(L1.rank + L2.rank, L1.maxrank, L2.maxrank))
+                self.assertEqual(L.maxrank, expected_maxrank)
+
     def test_lattice_equal(self):
         L1 = Lattice(3, [[2, 2, 2], [0, 1, 1]], HNF_policy=0)
         L2 = Lattice(3, [[2, 0, 0], [0, 1, 1]], HNF_policy=1)
