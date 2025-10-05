@@ -2872,7 +2872,7 @@ Lattice_add(PyObject *self, PyObject *other)
         Py_DECREF(result);
         return NULL;
     }
-    return result;
+    return (PyObject *)result;
 }
 
 static int
@@ -3647,7 +3647,7 @@ Lattice_decompose(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         assert(sub_N == uf_size[uf_parent[indexes_by_component[component_to_indexes_start[k]]]]);
         Py_ssize_t maxrank = maxranks[k];
         assert(maxrank <= sub_N);
-        Lattice *comp = (Lattice *)Lattice_new_impl(&Lattice_Type, sub_N, L->HNF_policy, maxrank);
+        PyObject *comp = Lattice_new_impl(&Lattice_Type, sub_N, L->HNF_policy, maxrank);
         if (comp == NULL) {
             goto error;
         }
