@@ -232,6 +232,7 @@ so `L1 + L2` consists of all vectors `v1 + v2` where `v1 in L1` and `v2 in L2`.
 
 Comparison methods such as `L1 < L2`, `L1 <= L2`, `L1 == L2` are also supported
 for detecting when one lattice is a subset of another.
+The expression `L1 & L2` computes the intersection of the two Lattices.
 
 ## `Lattice(n, data=..., /, *, maxrank=-1, HNF_policy=1)`
 
@@ -396,3 +397,55 @@ Vector([60, 40])
 This package does not provide a built-in way of applying more general linear operations
 on `Vector`s via matrices, nor a way to multiply matrices, but these can be emulated
 using appropriate `Vector` addition and scaling.
+
+## `L.decompose(keep_together=[], /)`
+
+It is sometimes useful to decompose a lattice into a direct sum of smaller lattices,
+shuffled together into disjoint rows and columns:
+
+```pycon
+>>> L = Lattice(6, [[10,0,2,0,0,0], [0,20,0,5,1,0], [0,0,0,30,2,0], [0,0,0,0,0,3]])
+>>> print(L)
+[10  0  2  0  0  0]
+[ 0 20  0  5  1  0]
+[ 0  0  0 30  2  0]
+[ 0  0  0  0  0  3]
+>>> indexes, summands = L.decompose()
+>>> indexes
+[[0, 2], [1, 3, 4], [5]]
+>>> print(summands[0])
+[10  2]
+>>> print(summands[1])
+[20  5  1]
+[ 0 30  2]
+>>> print(summands[2])
+[3]
+
+```
+
+The result of `L.decompose()` is a pair `(indexes, summands)` of two lists of the same length.
+The `indexes` list contains a partition of `range(L.ambient_dimension)`,
+stored as a list of lists of integers. Each list of integers is in ascending order,
+but the ordering between the lists in the `indexes` list is undefined.
+The list entry `summands[i]` is the result of restricting `L` only to the indexes (columns)
+defined by `indexes[i]`.
+
+By default, `L.decompose()` decomposes `L` into as many of these direct summands as possible.
+However, it is also possible to require some indices to be placed into the same direct summand:
+
+```pycon
+>>> L = Lattice(5, [[1, 0, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 3, 0, 0], [0, 0, 0, 4, 4]])
+>>> indexes, summands = L.decompose([[0, 1], [2, 3]])
+>>> indexes
+[[0, 1], [2, 3, 4]]
+>>> summands[0]
+Lattice(2, [[1, 0], [0, 2]])
+>>> summands[1]
+Lattice(3, [[3, 0, 0], [0, 4, 4]], maxrank=2)
+
+```
+
+The single optional argument of `L.decompose(keep_together)` should be an iterable
+of "component" iterables, and the integers in each component iterable are then ensured
+to be placed in the same component. The summands are allocated "tightly",
+with `maxrank` equal to their actual rank.
