@@ -950,6 +950,7 @@ class LatticeTests:
         with self.assertRaises(RuntimeError): L <= L
         with self.assertRaises(RuntimeError): L < Lattice(3)
         with self.assertRaises(RuntimeError): L == Lattice(3)
+        with self.assertRaises(RuntimeError): L.decompose()
         # Make sure clearing resets the corruption state.
         L.clear()
         L.copy()
@@ -1275,6 +1276,18 @@ class TestLatticeAPI(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "length mismatch"):
             L1 + L2
 
+    def test_lattice_add_maxrank(self):
+        lattices = [
+            Lattice(4, [Vector([0]*i + [1] + [0] * (4-1-i)) for i in range(k)], maxrank=n)
+            for n in range(4 + 1)
+            for k in range(n + 1)
+        ]
+        for L1 in lattices:
+            for L2 in lattices:
+                L = L1 + L2
+                expected_maxrank = min(4, max(L1.rank + L2.rank, L1.maxrank, L2.maxrank))
+                self.assertEqual(L.maxrank, expected_maxrank)
+
     def test_lattice_equal(self):
         L1 = Lattice(3, [[2, 2, 2], [0, 1, 1]], HNF_policy=0)
         L2 = Lattice(3, [[2, 0, 0], [0, 1, 1]], HNF_policy=1)
@@ -1414,6 +1427,165 @@ class TestKernels(unittest.TestCase):
             transpose(2**100, [])
         with self.assertRaisesRegex(ValueError, "vectors must have length N"):
             transpose(3, [Vector([1, 2]), Vector([3, 4, 5])])
+
+class TestIntersection(unittest.TestCase):
+    def test_intersection_simple(self):
+        A = Lattice(2, [[3, 0], [0, 3]])
+        B = Lattice(2, [[0, 1]])
+        self.assertEqual(A & B, Lattice(2, [[0, 3]]))
+        A = Lattice(1, [[12]])
+        B = Lattice(1, [[20]])
+        self.assertEqual(A & B, Lattice(1, [[60]]))
+        A = Lattice(2, [[1, 1]])
+        B = Lattice(2, [[0, 5], [2, 0]])
+        self.assertEqual(A & B, Lattice(2, [[10, 10]]))
+        A = Lattice(2, [[1, 1]])
+        B = Lattice(2, [[2, 3]])
+        self.assertEqual(A & B, Lattice(2))
+        # Based on https://github.com/sagemath/sage/blob/develop/src/sage/modules/free_module.py
+        A = Lattice(3, [[1, 1, 1], [1, 2, 3]])
+        B = Lattice(3, [[2, 2, 2], [1, 0, 0]])
+        self.assertEqual(A & B, Lattice(3, [[2, 2, 2]]))
+        A = Lattice(3, [[1, 0, 0], [1, 1, 0]])
+        B = Lattice(3, [[0, 1, 0], [0, 0, 1]])
+        self.assertEqual(A & B, Lattice(3, [[0, 1, 0]]))
+        A = Lattice.full(3)
+        B = Lattice(3, [[1, 0, 0], [1, 1, 0]])
+        self.assertEqual(A & B, B)
+
+    def test_intersection_exhaustive(self):
+        vectors = [Vector([x, y]) for x in range(-2, 3) for y in range(-2, 3)]
+        lattices = [Lattice(2, [v]) for v in vectors] + [Lattice(2, [v, w]) for v, w in itertools.combinations(vectors, 2)]
+        for A in lattices:
+            for B in lattices:
+                meet = A & B
+                join = A + B
+                self.assertEqual(meet.rank + join.rank, A.rank + B.rank)
+                self.assertLessEqual(meet, A)
+                self.assertLessEqual(meet, B)
+                for v in A.get_basis():
+                    if (v in B) != (v in meet):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+                for v in B.get_basis():
+                    if (v in A) != (v in meet):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+                for v in vectors:
+                    if (v in meet) != (v in A and v in B):
+                        self.fail(f"{A} & {B} produced {meet}. Check vector {v}")
+
+    def test_maxrank_after_operations_is_minimal(self):
+        L = Lattice(10, maxrank=4) & Lattice(10, maxrank=3)
+        self.assertEqual(L.maxrank, 0)
+        L = Lattice.full(3) & Lattice(3, [[2, 2, 2]])
+        self.assertEqual(L.maxrank, 1)
+
+    def test_errors(self):
+        A, B = Lattice(2), Lattice(5)
+        with self.assertRaisesRegex(ValueError, "dimension mismatch"):
+            A & B
+
+class TestDecompose(unittest.TestCase):
+    def test_noargs_simple(self):
+        self.assertEqual(
+            Lattice(2, [[3, 0], [0, 5]]).decompose(),
+            ([[0], [1]], [Lattice(1, [[3]]), Lattice(1, [[5]])])
+        )
+        self.assertEqual(
+            Lattice(2, [[1, 1], [0, 2]]).decompose(),
+            ([[0, 1]], [Lattice(2, [[1, 1], [0, 2]])])
+        )
+        self.assertEqual(
+            Lattice(3, [[1, 0, 1], [0, 5, 0], [0, 0, 2]]).decompose(),
+            ([[0, 2], [1]], [Lattice(2, [[1, 1], [0, 2]]), Lattice(1, [[5]])])
+        )
+        self.assertEqual(Lattice(0).decompose(), ([], []))
+        self.assertEqual(Lattice(1).decompose(), ([[0]], [Lattice(1)]))
+        self.assertEqual(Lattice(1, [[5]]).decompose(), ([[0]], [Lattice(1, [[5]])]))
+        self.assertEqual(
+            Lattice(10).decompose(),
+            ([[i] for i in range(10)], [Lattice(1, maxrank=0) for _ in range(10)])
+        )
+        self.assertEqual(
+            Lattice(5, [[0, 5, 0, 0, 0], [0, 0, 0, 6, 7]]).decompose(),
+            ([[0], [1], [2], [3, 4]], [Lattice(1), Lattice(1, [[5]]), Lattice(1), Lattice(2, [[6, 7]])])
+        )
+        self.assertEqual(
+            Lattice(4, [[0, 0, 200, -300]]).decompose(),
+            ([[0], [1], [2, 3]], [Lattice(1), Lattice(1), Lattice(2, [[200, -300]])])
+        )
+        self.assertEqual(
+            Lattice(10, [[0,1,0,0,0,0,0,0,0,1],
+                         [0,0,2,0,0,0,0,2,0,0],
+                         [0,0,0,3,0,0,0,0,0,1],
+                         [0,0,0,0,4,0,6,0,0,0],
+                         [0,0,0,0,0,5,0,0,0,0],
+                         [0,0,0,0,0,0,0,7,8,0]]).decompose(),
+            ([[0], [1, 3, 9], [2, 7, 8], [4, 6], [5]],
+             [Lattice(1),
+              Lattice(3, [[1, 0, 1], [0, 3, 1]]),
+              Lattice(3, [[2, 2, 0], [0, 7, 8]]),
+              Lattice(2, [[4, 6]]),
+              Lattice(1, [[5]]),])
+        )
+
+    def test_noargs_exhaustive(self):
+        vectors = list(map(Vector, map(list, itertools.product([-1, 0, 1, 2], repeat=4))))
+        lattices = (
+            [Lattice(4, maxrank=0), Lattice.full(4)]
+            + [Lattice(4, [v], maxrank=1) for v in vectors]
+            + [Lattice(4, [v, w], maxrank=2) for v, w in itertools.combinations(vectors, 2)]
+        )
+        for L in lattices:
+            indexes, summands = L.decompose()
+            self.assertEqual(len(indexes), len(summands))
+            self.assertEqual(sum(map(len, indexes)), 4)
+            self.assertEqual({x for arr in indexes for x in arr}, set(range(4)))
+            self.assertEqual(sum(summand.rank for summand in summands), L.rank)
+            self.assertEqual(sum(summand.ambient_dimension for summand in summands), L.ambient_dimension)
+            for summand in summands:
+                self.assertEqual(summand.maxrank, summand.rank)
+                self.assertEqual(summand.decompose(), ([list(range(summand.ambient_dimension))], [summand]))
+            reconstruction = Lattice(4)
+            for arr, summand in zip(indexes, summands):
+                self.assertEqual(summand.ambient_dimension, len(arr))
+                for vec0 in summand.get_basis():
+                    vec = Vector.zero(4)
+                    for i, x in enumerate(arr):
+                        vec[x] = vec0[i]
+                    reconstruction.add_vector(vec)
+            self.assertEqual(L, reconstruction)
+
+    def test_keeping_together(self):
+        L = Lattice(3, [[10, 0, 0], [0, 20, 0], [0, 0, 30]])
+        self.assertEqual(L.decompose([]),
+            ([[0], [1], [2]], [Lattice(1, [[10]]), Lattice(1, [[20]]), Lattice(1, [[30]])])
+        )
+        self.assertEqual(L.decompose([[0, 1]]),
+            ([[0, 1], [2]], [Lattice(2, [[10, 0], [0, 20]]), Lattice(1, [[30]])])
+        )
+        self.assertEqual(L.decompose([[0, 2]]),
+            ([[0, 2], [1]], [Lattice(2, [[10, 0], [0, 30]]), Lattice(1, [[20]])])
+        )
+        self.assertEqual(L.decompose([[0, 2], [2, 0], [0, 0, 0, 0, 2], [], [1, 1, 1], [1]]),
+            ([[0, 2], [1]], [Lattice(2, [[10, 0], [0, 30]]), Lattice(1, [[20]])])
+        )
+        self.assertEqual(L.decompose([[2, 1], [2, 0]]),
+            ([[0, 1, 2]], [Lattice(3, [[10, 0, 0], [0, 20, 0], [0, 0, 30]])])
+        )
+
+    def test_errors(self):
+        L = Lattice.full(3)
+        with self.assertRaisesRegex(TypeError, "takes 0 or 1 arguments"):
+            L.decompose(1, 2)
+        with self.assertRaisesRegex(TypeError, "iterable"):
+            L.decompose(1)
+        with self.assertRaisesRegex(TypeError, "iterable"):
+            L.decompose([1])
+        with self.assertRaisesRegex(TypeError, "indexes must be ints"):
+            L.decompose([[4.0]])
+        with self.assertRaisesRegex(IndexError, "index out of range"):
+            L.decompose([[3]])
+        self.assertEqual(L.decompose([[2]]), ([[0],[1],[2]], [Lattice.full(1)]*3))
 
 if __name__ == "__main__":
     unittest.main(exit=False)

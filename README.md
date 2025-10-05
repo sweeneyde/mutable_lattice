@@ -5,11 +5,11 @@ for sublattices of an integral lattice Z^n, with miscellaneous other integer lin
 
 Install this package with `python -m pip install mutable_lattice`.
 
-Run the tests with `python -m mutable_lattice.tests`.
+Run the tests with `python -m mutable_lattice.test`.
 
 # Demo
 
-The following constructs a sublattice of `Z^3`, adds some vectors to it,
+The following constructs a sublattice of Z^3, adds some vectors to it,
 then tests which vectors are in the integer span of the previously added vectors.
 
 ```pycon
@@ -44,6 +44,9 @@ There are more general integer linear algebra libraries included in SageMath (in
 and some of these may be preferred, especially when matrix entries include large integers,
 but this `mutable_lattice` package specializes in fast `add_vector` and `__contains__` operations,
 and is especially fast with machine-word-sized integers.
+To this end, the `mutable_lattice` library presently does not use any algorithms based on modular arithmetic
+(e.g. [Pernet and Stein 2009](https://wstein.org/papers/hnf/)),
+and we instead rely only on (generalized) row operations.
 
 # Features
 
@@ -78,7 +81,7 @@ Vector([1000000000000000000000, 2000000000000000000000, 3000000000000000000000])
 
 ```
 
-One can access entries of a vector with the `__getitem__`, `tolist`, and `__iter__` methods:
+One can access entries of a `Vector` with the `__getitem__`, `tolist`, and `__iter__` methods:
 
 ```pycon
 >>> v = Vector([10, 20, 30])
@@ -95,7 +98,7 @@ One can access entries of a vector with the `__getitem__`, `tolist`, and `__iter
 
 ```
 
-Vector are mutable and have `__iadd__`, `__isub__`, `__imul__`, and `__setitem__` methods:
+`Vector`s are mutable and have `__iadd__`, `__isub__`, `__imul__`, and `__setitem__` methods:
 
 ```pycon
 >>> v = Vector([1, 1, 1, 1, 1])
@@ -171,8 +174,8 @@ So `L.__str__()` is displaying a matrix of height `L.rank` and width `L.ambient_
 
 ```
 
-The `Lattice.__contains__(v)` method identifies whether the argument `v`
-is the `Lattice`, i.e., whether `v` is in the integer span of the stored basis:
+The `Lattice.__contains__(v)` method identifies whether the argument `Vector`
+is in the `Lattice`, i.e., whether `v` is in the integer span of the stored basis:
 
 ```pycon
 >>> print(L) # Continuing from above
@@ -207,9 +210,8 @@ Vector([777, 1, 11, 1, 11])
 
 ```
 
-`Lattice.__add__`  and `Lattice.__iadd__` methods allow adding two lattices,
-so if `v` is a vector and `L1`, `L2` are `Lattice`s of the same `ambient_dimension`,
-then `v in (L1 + L2)` if and only if we can write `v = v1 + v2` where `v1 in L1` and `v2 in L2`:
+`Lattice.__add__`  and `Lattice.__iadd__` methods allow adding two lattices of the same ambient dimension,
+so `L1 + L2` consists of all vectors `v1 + v2` where `v1 in L1` and `v2 in L2`.
 
 ```pycon
 >>> L1 = Lattice(4)
@@ -230,11 +232,12 @@ then `v in (L1 + L2)` if and only if we can write `v = v1 + v2` where `v1 in L1`
 
 Comparison methods such as `L1 < L2`, `L1 <= L2`, `L1 == L2` are also supported
 for detecting when one lattice is a subset of another.
+The expression `L1 & L2` computes the intersection of the two Lattices.
 
 ## `Lattice(n, data=..., /, *, maxrank=-1, HNF_policy=1)`
 
-The `Lattice(n, data)` constructor creates a sublattice of `Z^n`
-and accepts an optional second positional `data` argument
+The `Lattice(n, data)` constructor creates a sublattice of Z^n
+and accepts an optional second positional  argument `data`
 which must be a list of any length, of `Vector`s or lists of length `n`,
 which are added to the lattice as if by calling
 `add_vector(v)` or `add_vector(Vector(v))` for each `v` in `data`.
@@ -252,21 +255,23 @@ If a `Lattice` is constructed instead with `HNF_policy=0` then
 the basis of the `Lattice` is stored in some row echelon form,
 but the pivots are not necessarily positive,
 and entries of the matrix above pivots are not normalized to HNF.
-This lazier policy may be faster if your basis is
-particularly sparse or small (say `n <= 10` but always be sure to measure for your particular application).
+This lazier policy `0` may be faster if your basis is
+particularly sparse or small (say `n <= 10` but always be sure to measure for your particular application),
+but the required row operations can otherwise quickly cause integers to explode in size,
+which is partially mitigated by using `HNF_policy=1`.
 If you have a Lattice not stored in HNF then calling `L.HNFify()`
 will perform row operations to convert to HNF.
 
-The full lattice that contains every vector in `Z^n` can be constructed
+The full lattice that contains every vector in Z^n can be constructed
 using the classmethod `Lattice.full(n)`. `L.is_full()`
 returns whether `L == Lattice.full(L.ambient_dimension)`.
 
 ## SNF invariants
 
-Given a Lattice `L` in `Z^n`, some (integer-)invertible n-by-n integer matrix takes `L`
+Given a Lattice `L` in Z^n, some (integer-)invertible n-by-n integer matrix takes `L`
 to a Lattice with a basis `[Vector([d0, 0, 0, ...]), Vector([0, d1, 0, ...]), Vector([0, 0, d2, ...]), ...]`
 in which the `i`th `Vector` is positive in its `i`th entry and zero elsewhere.
-The matrix with these rows (and an additional and divisibility constraint)
+The matrix with these rows (and an additional divisibility constraint)
 is the [Smith normal form (SNF)](https://en.wikipedia.org/wiki/Smith_normal_form)
 of the matrix with the original basis of `L` for rows. The `Lattice.nonzero_invariants()` method
 returns a list `[d0, d1, d2, ...]` of these diagonal entries of the Smith normal form.
@@ -290,21 +295,21 @@ Note that the quotient group `Z^n/L` is isomorphic
 to the direct sum of cyclic groups `Z/dZ` for `d` in `L.invariants()`,
 where `Z/0Z = Z`.
 
-The homology/cohomology of a chain complex of integer matrices between free abelian groups
+The (co)homology of a chain complex of integer matrices between free abelian groups
 can be computed using this method:
 
 ```pycon
->>> # Chain complex from a Klein bottle Delta-complex
+>>> # Chain complex from a Klein bottle CW complex
 >>> cell_counts = {-1: 0, 0: 1, 1: 2, 2: 1, 3: 0}
->>> matrices = {
+>>> boundary = {
 ...     0: [Vector([])],
 ...     1: [Vector([0]), Vector([0])],
 ...     2: [Vector([2, 0])],
 ...     3: [],
 ... }
 >>> invariant_lists = {
-...    i: Lattice(cell_counts[i-1], m).nonzero_invariants()
-...    for i, m in matrices.items()
+...    i: Lattice(cell_counts[i-1], M).nonzero_invariants()
+...    for i, M in boundary.items()
 ... }
 >>> for i in (0, 1, 2):
 ...     free_rank = cell_counts[i] - len(invariant_lists[i]) - len(invariant_lists[i+1])
@@ -322,6 +327,9 @@ H^1 = [0]
 H^2 = [2]
 
 ```
+
+We do not currently provide functionality to produce the unimodular matrices *S*, *T*
+that put a matrix *A* into its Smith normal form *SAT*.
 
 ## Kernel computations
 
@@ -341,7 +349,7 @@ Thinking of the provided list `[v1, ..., vk]` as a matrix *M* of row vectors,
 the result of `relations_among()` is the `Lattice` of vectors *w* such that *wM*=0,
 i.e, the left-kernel of *M*.
 
-To instead compute the classic right-kernel that solves *Mv*=0, first the transpose
+To instead compute the classic right-kernel that solves *Mw*=0, first transpose
 the matrix with the `transpose(n, [v1, ..., vk])` function (which requires each `Vector` in the list to have length `n`):
 
 ```pycon
@@ -389,3 +397,55 @@ Vector([60, 40])
 This package does not provide a built-in way of applying more general linear operations
 on `Vector`s via matrices, nor a way to multiply matrices, but these can be emulated
 using appropriate `Vector` addition and scaling.
+
+## `L.decompose(keep_together=[], /)`
+
+It is sometimes useful to decompose a lattice into a direct sum of smaller lattices,
+shuffled together into disjoint rows and columns:
+
+```pycon
+>>> L = Lattice(6, [[10,0,2,0,0,0], [0,20,0,5,1,0], [0,0,0,30,2,0], [0,0,0,0,0,3]])
+>>> print(L)
+[10  0  2  0  0  0]
+[ 0 20  0  5  1  0]
+[ 0  0  0 30  2  0]
+[ 0  0  0  0  0  3]
+>>> indexes, summands = L.decompose()
+>>> indexes
+[[0, 2], [1, 3, 4], [5]]
+>>> print(summands[0])
+[10  2]
+>>> print(summands[1])
+[20  5  1]
+[ 0 30  2]
+>>> print(summands[2])
+[3]
+
+```
+
+The result of `L.decompose()` is a pair `(indexes, summands)` of two lists of the same length.
+The `indexes` list contains a partition of `range(L.ambient_dimension)`,
+stored as a list of lists of integers. Each list of integers is in ascending order,
+but the ordering between the lists in the `indexes` list is undefined.
+The list entry `summands[i]` is the result of restricting `L` only to the indexes (columns)
+defined by `indexes[i]`.
+
+By default, `L.decompose()` decomposes `L` into as many of these direct summands as possible.
+However, it is also possible to require some indices to be placed into the same direct summand:
+
+```pycon
+>>> L = Lattice(5, [[1, 0, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 3, 0, 0], [0, 0, 0, 4, 4]])
+>>> indexes, summands = L.decompose([[0, 1], [2, 3]])
+>>> indexes
+[[0, 1], [2, 3, 4]]
+>>> summands[0]
+Lattice(2, [[1, 0], [0, 2]])
+>>> summands[1]
+Lattice(3, [[3, 0, 0], [0, 4, 4]], maxrank=2)
+
+```
+
+The single optional argument of `L.decompose(keep_together)` should be an iterable
+of "component" iterables, and the integers in each component iterable are then ensured
+to be placed in the same component. The summands are allocated "tightly",
+with `maxrank` equal to their actual rank.
