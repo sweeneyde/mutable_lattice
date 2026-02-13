@@ -4001,80 +4001,6 @@ static PyTypeObject Lattice_Type = {
 /*********************************************************************/
 
 static PyObject *
-relations_among_simple(PyObject *Py_UNUSED(mod), PyObject *arg)
-{
-    if (!PyList_CheckExact(arg)) {
-        PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list");
-        return NULL;
-    }
-    Py_ssize_t R = PyList_GET_SIZE(arg);
-    if (R == 0) {
-        return Lattice_new_impl(&Lattice_Type, 0, 1, 0);
-    }
-    Py_ssize_t N = -1;
-    for (Py_ssize_t i = 0; i < R; i++) {
-        PyObject *v = PyList_GET_ITEM(arg, i);
-        if (Py_TYPE(v) != &Vector_Type) {
-            PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list of Vectors");
-            return NULL;
-        }
-        if (i == 0) {
-            N = Py_SIZE(v);
-        } else {
-            if (Py_SIZE(v) != N) {
-                PyErr_SetString(PyExc_ValueError, "length mismatch in relations_among");
-                return NULL;
-            }
-        }
-    }
-    // The basic strategy is to write an augmented matrix [rows | identity],
-    // then put this in HNF. The result is a new matrix where the left portion's
-    // zero rows are at the bottom. To make these zero rows, we had to take
-    // Z-linear combination of the input rows. The right portion keeps
-    // track of the coefficients needed to do so.
-
-    TagInt *scratch = (TagInt *)PyMem_Malloc((N + R) * sizeof(TagInt *));
-    if (scratch == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
-    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N + R, 1, R);
-    if (L == NULL) {
-        PyMem_Free(scratch);
-        return NULL;
-    }
-    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(arg); i++) {
-        PyObject *v = PyList_GET_ITEM(arg, i);
-        memcpy(scratch, Vector_get_vec(v), N*sizeof(TagInt *));
-        memset(scratch + N, 0, R*sizeof(TagInt *));
-        scratch[N+i] = TagInt_ONE;
-        if (Lattice_add_vector_impl(L, scratch)) {
-            PyMem_Free(scratch);
-            Py_DECREF(L);
-            return NULL;
-        }
-    }
-    PyMem_Free(scratch);
-    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
-    if (result == NULL) {
-        Py_DECREF(L);
-        return NULL;
-    }
-    assert(L->rank == R);
-    for (Py_ssize_t i = R - 1; i >= 0; i--) {
-        if (L->row_to_pivot[i] >= N) {
-            if (Lattice_add_vector_impl(result, L->basis[i] + N)) {
-                Py_DECREF(L);
-                Py_DECREF(result);
-                return NULL;
-            }
-        }
-    }
-    Py_DECREF(L);
-    return (PyObject *)result;
-}
-
-static PyObject *
 relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
 {
     if (!PyList_CheckExact(arg)) {
@@ -4318,8 +4244,6 @@ static PyMethodDef mutable_lattice_methods[] = {
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
     {"relations_among", relations_among, METH_O,
      "relations_among([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
-    {"relations_among_simple", relations_among_simple, METH_O,
-     "relations_among_simple([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
     {"transpose", (PyCFunction)(void(*)(void))transpose, METH_FASTCALL,
      "transpose(N, [v0, ..., vk]) transposes a length-k list of legth-N vectors into a length-N list of length-k vectors"},
     {NULL, NULL, 0, NULL}   /* sentinel */

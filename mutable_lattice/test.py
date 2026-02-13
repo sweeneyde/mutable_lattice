@@ -1060,6 +1060,10 @@ class TestLatticeAPI(unittest.TestCase):
     def test_constructor_with_data_errors(self):
         with self.assertRaisesRegex(TypeError, "list or Vector"):
             L = Lattice(3, [(1,2,3)])
+        with self.assertRaisesRegex(ValueError, "size mismatch while adding data to Lattice"):
+            L = Lattice(3, [[1,2,]])
+        with self.assertRaisesRegex(ValueError, "second argument must be list"):
+            L = Lattice(3, 42)
 
     def test_is_full(self):
         for HNF_policy in [0, 1]:
