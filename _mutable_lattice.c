@@ -2089,7 +2089,7 @@ Lattice_update(Lattice *L, PyObject *data)
     if (order == NULL) {
         goto error;
     }
-    for (Py_ssize_t i = 0; i < R; i++) {
+    for (Py_ssize_t i = R - 1; i >= 0; i--) {
         if (Lattice_add_vector_impl(L, Vector_get_vec(PyList_GET_ITEM(data_copy, order[i])))) {
             PyMem_Free(order);
             goto error;

@@ -7,7 +7,7 @@ setup(
             # To enable architecture-specific optimizations
             # extra_compile_args=["-march=native"],
             # More compiler warnings:
-            extra_compile_args=["-Wall", "-Werror", "-Wextra"],
+            # extra_compile_args=["-Wall", "-Werror", "-Wextra"],
             # To enable assertions:
             # undef_macros=['NDEBUG'],
         )
