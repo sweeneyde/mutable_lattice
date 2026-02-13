@@ -713,7 +713,7 @@ Vector_zero_impl(Py_ssize_t N)
 }
 
 static PyObject *
-Vector_zero(PyTypeObject *type, PyObject *n_obj)
+Vector_zero(PyTypeObject *Py_UNUSED(type), PyObject *n_obj)
 {
     Py_ssize_t N = PyLong_AsSsize_t(n_obj);
     if (N == -1 && PyErr_Occurred()) {
@@ -1356,7 +1356,7 @@ row_op_impl(TagInt *v, TagInt *w, Py_ssize_t n, PyObject *k_obj)
 }
 
 static PyObject *
-row_op(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+row_op(PyObject *Py_UNUSED(self), PyObject *const *args, Py_ssize_t nargs)
 {
     if (nargs != 3) {
         PyErr_SetString(PyExc_TypeError, "row_op(v, w, k) takes 3 arguments.");
@@ -1427,7 +1427,7 @@ use_objects:
 }
 
 static PyObject *
-generalized_row_op(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+generalized_row_op(PyObject *Py_UNUSED(self), PyObject *const *args, Py_ssize_t nargs)
 {
     if (nargs != 6) {
         PyErr_SetString(PyExc_TypeError, "generalized_row_op(v, w, a, b, c, d) takes 6 arguments.");
@@ -1597,7 +1597,7 @@ xgcd_using_intptr(intptr_t a, intptr_t b, intptr_t *result)
 
 
 static PyObject *
-xgcd(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+xgcd(PyObject *Py_UNUSED(self), PyObject *const *args, Py_ssize_t nargs)
 {
     if (nargs != 2) {
         PyErr_SetString(PyExc_TypeError, "xgcd(a, b) takes 2 arguments.");
@@ -1984,8 +1984,124 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
     return (PyObject *)L;
 }
 
+static Py_ssize_t *
+counting_sort(Py_ssize_t *inputs, Py_ssize_t length, Py_ssize_t upper_bound)
+{
+    Py_ssize_t *count = PyMem_Calloc(upper_bound, sizeof(Py_ssize_t));
+    if (count == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    Py_ssize_t *output = PyMem_Malloc(length * sizeof(Py_ssize_t));
+    if (output == NULL) {
+        PyMem_Free(count);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < length; i++) {
+        // make a histogram
+        assert(inputs[i] < upper_bound);
+        count[inputs[i]]++;
+    }
+    for (Py_ssize_t v = 1; v < upper_bound; v++) {
+        // prefix sum to compute the end of the range where each value goes
+        count[v] += count[v - 1];
+    }
+    for (Py_ssize_t i = length - 1; i >= 0; i--) {
+        // append to the appropriate range, and shrink the range.
+        output[--count[inputs[i]]] = i;
+    }
+    PyMem_Free(count);
+    return output;
+}
+
+static Py_ssize_t *
+insertion_ordering(Py_ssize_t N, PyObject *data)
+{
+    // sorted(range(len(data)),
+    //        key=first_index_of_nonzero,
+    //        reverse=True)
+    assert(PyList_CheckExact(data));
+    Py_ssize_t R = PyList_GET_SIZE(data);
+    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
+    if (index_of_first_nonzero == NULL) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        Py_ssize_t index = N;
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(data, i));
+        for (Py_ssize_t j = 0; j < N; j++) {
+            if (!TagInt_is_zero(vec[j])) {
+                index = j;
+                break;
+            }
+        }
+        index_of_first_nonzero[i] = index;
+    }
+    Py_ssize_t *order = counting_sort(index_of_first_nonzero, R, N+1);
+    PyMem_Free(index_of_first_nonzero);
+    return order;
+}
+
 static bool
-Lattice_add_vector_or_list_impl(PyObject *self, PyObject *other);
+Lattice_add_vector_impl(Lattice *, TagInt *);
+
+static bool
+Lattice_update(Lattice *L, PyObject *data)
+{
+    if (!PyList_CheckExact(data)) {
+        PyErr_SetString(PyExc_TypeError, "Lattice(N, data) second argument must be list");
+        return true;
+    }
+    Py_ssize_t N = L->N;
+    Py_ssize_t R = PyList_GET_SIZE(data);
+    PyObject *data_copy = PyList_New(R);
+    if (data_copy == NULL) {
+        return true;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        if (PyList_GET_SIZE(data) != R) {
+            PyErr_SetString(PyExc_RuntimeError, "data mutated while adding to Lattice");
+            goto error;
+        }
+        PyObject *vec = PyList_GET_ITEM(data, i);
+        if (Py_TYPE(vec) == &PyList_Type) {
+            vec = Vector_new_impl(vec);
+            if (vec == NULL) {
+                goto error;
+            }
+        }
+        else if (Py_TYPE(vec) == &Vector_Type) {
+            Py_INCREF(vec);
+        }
+        else {
+            PyErr_SetString(PyExc_TypeError, "Lattice data entries must be list or Vector");
+            goto error;
+        }
+        if (Py_SIZE(vec) != N) {
+            Py_DECREF(vec);
+            PyErr_SetString(PyExc_ValueError, "size mismatch while adding data to Lattice");
+            goto error;
+        }
+        PyList_SET_ITEM(data_copy, i, vec);
+    }
+    Py_ssize_t *order = insertion_ordering(N, data_copy);
+    if (order == NULL) {
+        goto error;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        if (Lattice_add_vector_impl(L, Vector_get_vec(PyList_GET_ITEM(data_copy, order[i])))) {
+            PyMem_Free(order);
+            goto error;
+        }
+    }
+    PyMem_Free(order);
+    Py_DECREF(data_copy);
+    return false;
+error:
+    Py_DECREF(data_copy);
+    return true;
+}
 
 static PyObject *
 Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
@@ -2020,16 +2136,9 @@ Lattice_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
     if (data == NULL) {
         return result;
     }
-    if (!PyList_Check(data)) {
-        PyErr_SetString(PyExc_TypeError, "Lattice(N, data) second argument must be list");
+    if (Lattice_update((Lattice *)result, data)) {
         Py_DECREF(result);
         return NULL;
-    }
-    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(data); i++) {
-        if (Lattice_add_vector_or_list_impl(result, PyList_GET_ITEM(data, i))) {
-            Py_DECREF(result);
-            return NULL;
-        }
     }
     return result;
 }
@@ -2724,30 +2833,6 @@ Lattice_add_vector(PyObject *self, PyObject *other)
     Py_RETURN_NONE;
 }
 
-static bool
-Lattice_add_vector_or_list_impl(PyObject *self, PyObject *other)
-{
-    if (Py_TYPE(other) == &PyList_Type) {
-        other = Vector_new_impl(other);
-        if (other == NULL) {
-            return true;
-        }
-    }
-    else if (Py_TYPE(other) == &Vector_Type) {
-        Py_INCREF(other);
-    }
-    else {
-        PyErr_SetString(PyExc_TypeError, "Lattice data entries must be list or Vector");
-        return true;
-    }
-    PyObject *res = Lattice_add_vector(self, other);
-    Py_DECREF(other);
-    if (res == NULL) {
-        return true;
-    }
-    Py_DECREF(res);
-    return false;
-}
 
 static PyObject *
 Lattice_get_basis(PyObject *self, PyObject *Py_UNUSED(ignored))
@@ -3567,7 +3652,7 @@ Lattice_decompose(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         PyErr_NoMemory();
         goto error;
     }
-    for (Py_ssize_t j = 0; j < L->N; j++) {
+    for (Py_ssize_t j = 0; j < N; j++) {
         uf_parent[j] = j;
         uf_size[j] = 1;
     }
@@ -3916,7 +4001,7 @@ static PyTypeObject Lattice_Type = {
 /*********************************************************************/
 
 static PyObject *
-relations_among(PyObject *mod, PyObject *arg)
+relations_among_simple(PyObject *Py_UNUSED(mod), PyObject *arg)
 {
     if (!PyList_CheckExact(arg)) {
         PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list");
@@ -3942,10 +4027,12 @@ relations_among(PyObject *mod, PyObject *arg)
             }
         }
     }
-    if (N > PY_SSIZE_T_MAX - R || (size_t)N + (size_t)R > PY_SSIZE_T_MAX/sizeof(TagInt *)) {
-        PyErr_SetNone(PyExc_OverflowError);
-        return NULL;
-    }
+    // The basic strategy is to write an augmented matrix [rows | identity],
+    // then put this in HNF. The result is a new matrix where the left portion's
+    // zero rows are at the bottom. To make these zero rows, we had to take
+    // Z-linear combination of the input rows. The right portion keeps
+    // track of the coefficients needed to do so.
+
     TagInt *scratch = (TagInt *)PyMem_Malloc((N + R) * sizeof(TagInt *));
     if (scratch == NULL) {
         PyErr_NoMemory();
@@ -3974,7 +4061,7 @@ relations_among(PyObject *mod, PyObject *arg)
         return NULL;
     }
     assert(L->rank == R);
-    for (Py_ssize_t i = 0; i < R; i++) {
+    for (Py_ssize_t i = R - 1; i >= 0; i--) {
         if (L->row_to_pivot[i] >= N) {
             if (Lattice_add_vector_impl(result, L->basis[i] + N)) {
                 Py_DECREF(L);
@@ -3988,7 +4075,152 @@ relations_among(PyObject *mod, PyObject *arg)
 }
 
 static PyObject *
-transpose(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
+{
+    if (!PyList_CheckExact(arg)) {
+        PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list");
+        return NULL;
+    }
+    Py_ssize_t R = PyList_GET_SIZE(arg);
+    if (R == 0) {
+        return Lattice_new_impl(&Lattice_Type, 0, 1, 0);
+    }
+    Py_ssize_t N = -1;
+    for (Py_ssize_t i = 0; i < R; i++) {
+        PyObject *v = PyList_GET_ITEM(arg, i);
+        if (Py_TYPE(v) != &Vector_Type) {
+            PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list of Vectors");
+            return NULL;
+        }
+        if (i == 0) {
+            N = Py_SIZE(v);
+        } else {
+            if (Py_SIZE(v) != N) {
+                PyErr_SetString(PyExc_ValueError, "length mismatch in relations_among");
+                return NULL;
+            }
+        }
+    }
+    // The basic strategy is to write an augmented matrix [rows | identity],
+    // then put this in HNF. The result is a new matrix where the left portion's
+    // zero rows are at the bottom. To make these zero rows, we had to take
+    // Z-linear combination of the input rows. The right portion keeps
+    // track of the coefficients needed to do so.
+
+    // A first tweak:
+    // Earlier columns influence what row operations happen on what that follows them,
+    // so we reshuffle the columns so that less populated columns come first.
+    Py_ssize_t *column_weights = PyMem_Calloc(N, sizeof(Py_ssize_t));
+    if (column_weights == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
+        for (Py_ssize_t j = 0; j < N; j++) {
+            TagInt t = vec[j];
+            if (!TagInt_is_zero(t)) {
+                column_weights[j] += 1 + TagInt_is_pointer(t);
+            }
+        }
+    }
+    Py_ssize_t *columns_by_increasing_weight = counting_sort(column_weights, N, 2*R + 1);
+    if (columns_by_increasing_weight == NULL) {
+        PyErr_NoMemory();
+        PyMem_Free(column_weights);
+        return NULL;
+    }
+    Py_ssize_t k0 = 0;
+    while (k0 < N && column_weights[columns_by_increasing_weight[k0]] == 0) {
+        // trim away zeros columns
+        k0++;
+    }
+    PyMem_Free(column_weights);
+
+    // A second tweak:
+    // Sort rows by increasing index of first nonzero entry. This allows
+    // the bottom right corner to stay HNF while new rows are added above it.
+    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
+    if (index_of_first_nonzero == NULL) {
+        PyMem_Free(columns_by_increasing_weight);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < R; i++) {
+        Py_ssize_t index = N;
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
+        for (Py_ssize_t k = k0; k < N; k++) {
+            if (!TagInt_is_zero(vec[columns_by_increasing_weight[k]])) {
+                index = k;
+                break;
+            }
+        }
+        index_of_first_nonzero[i] = index;
+    }
+    Py_ssize_t *rows_by_index_of_first_nonzero = counting_sort(index_of_first_nonzero, R, N + 1);
+    PyMem_Free(index_of_first_nonzero);
+    if (rows_by_index_of_first_nonzero == NULL) {
+        PyMem_Free(columns_by_increasing_weight);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+
+    // Now add everything in in an appropriate order
+    TagInt *scratch = (TagInt *)PyMem_Malloc((N - k0 + R) * sizeof(TagInt *));
+    if (scratch == NULL) {
+        PyMem_Free(rows_by_index_of_first_nonzero);
+        PyMem_Free(columns_by_increasing_weight);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
+    if (L == NULL) {
+        PyMem_Free(rows_by_index_of_first_nonzero);
+        PyMem_Free(columns_by_increasing_weight);
+        PyMem_Free(scratch);
+        return NULL;
+    }
+    for (Py_ssize_t ii = R-1; ii >= 0; ii--) {
+        Py_ssize_t i = rows_by_index_of_first_nonzero[ii];
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
+        for (Py_ssize_t k = k0; k < N; k++) {
+            scratch[k - k0] = vec[columns_by_increasing_weight[k]];
+        }
+        memset(scratch + N - k0, 0, R*sizeof(TagInt *));
+        scratch[N - k0 + i] = TagInt_ONE;
+        if (Lattice_add_vector_impl(L, scratch)) {
+            PyMem_Free(rows_by_index_of_first_nonzero);
+            PyMem_Free(columns_by_increasing_weight);
+            PyMem_Free(scratch);
+            Py_DECREF(L);
+            return NULL;
+        }
+    }
+    PyMem_Free(rows_by_index_of_first_nonzero);
+    PyMem_Free(columns_by_increasing_weight);
+    PyMem_Free(scratch);
+    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
+    if (result == NULL) {
+        Py_DECREF(L);
+        return NULL;
+    }
+    assert(L->rank == R);
+    for (Py_ssize_t i = R - 1; i >= 0; i--) {
+        if (L->row_to_pivot[i] >= N - k0) {
+            if (Lattice_add_vector_impl(result, L->basis[i] + N - k0)) {
+                Py_DECREF(L);
+                Py_DECREF(result);
+                return NULL;
+            }
+        }
+    }
+    Py_DECREF(L);
+    return (PyObject *)result;
+}
+
+static PyObject *
+transpose(PyObject *Py_UNUSED(mod), PyObject *const *args, Py_ssize_t nargs)
 {
     if (nargs != 2) {
         PyErr_SetString(PyExc_TypeError, "transpose(N, [v1, ..., vk]) takes 2 arguments");
@@ -4086,6 +4318,8 @@ static PyMethodDef mutable_lattice_methods[] = {
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
     {"relations_among", relations_among, METH_O,
      "relations_among([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
+    {"relations_among_simple", relations_among_simple, METH_O,
+     "relations_among_simple([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
     {"transpose", (PyCFunction)(void(*)(void))transpose, METH_FASTCALL,
      "transpose(N, [v0, ..., vk]) transposes a length-k list of legth-N vectors into a length-N list of length-k vectors"},
     {NULL, NULL, 0, NULL}   /* sentinel */
