@@ -84,6 +84,18 @@ PyLong_FromIntptr(intptr_t x)
     return PyLong_FromSsize_t(x);
 }
 
+static Py_ssize_t
+pylong_bit_length(PyObject *x)
+{
+    // This could be faster using a currently unstable API.
+    PyObject *numbits_o = PyObject_CallMethod(x, "bit_length", NULL);
+    if (numbits_o == NULL) {
+        return -1;
+    }
+    Py_ssize_t numbits = PyLong_AsSsize_t(numbits_o);
+    Py_DECREF(numbits_o);
+    return numbits;
+}
 
 /*********************************************************************/
 /* Compiler-specific magic to detect overflows                       */
@@ -331,6 +343,24 @@ TagInt_to_object(TagInt t)
     } else {
         return PyLong_FromIntptr(unpack_integer(t));
     }
+}
+
+static Py_ssize_t
+TagInt_bit_length(TagInt t)
+{
+    if (TagInt_is_pointer(t)) {
+        return pylong_bit_length(untag_pointer(t));
+    }
+    intptr_t x = unpack_integer(t);
+    if (x < 0) {
+        x = -x;
+    }
+    Py_ssize_t res = 0;
+    while (x) {
+        x >>= 1;
+        res++;
+    }
+    return res;
 }
 
 // Puts a new reference in *c.
@@ -1985,8 +2015,15 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
 }
 
 static Py_ssize_t *
-counting_sort(Py_ssize_t *inputs, Py_ssize_t length, Py_ssize_t upper_bound)
+counting_sort_order(Py_ssize_t *inputs, Py_ssize_t length)
 {
+    Py_ssize_t upper_bound = 1;
+    for (Py_ssize_t i = 0; i < length; i++) {
+        assert(inputs[i] >= 0);
+        if (inputs[i] >= upper_bound) {
+            upper_bound = inputs[i] + 1;
+        }
+    }
     Py_ssize_t *count = PyMem_Calloc(upper_bound, sizeof(Py_ssize_t));
     if (count == NULL) {
         PyErr_NoMemory();
@@ -2038,7 +2075,7 @@ insertion_ordering(Py_ssize_t N, PyObject *data)
         }
         index_of_first_nonzero[i] = index;
     }
-    Py_ssize_t *order = counting_sort(index_of_first_nonzero, R, N+1);
+    Py_ssize_t *order = counting_sort_order(index_of_first_nonzero, R);
     PyMem_Free(index_of_first_nonzero);
     return order;
 }
@@ -4033,116 +4070,127 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     // Z-linear combination of the input rows. The right portion keeps
     // track of the coefficients needed to do so.
 
+    Py_ssize_t *nonzero_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
+    Py_ssize_t *bits_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
+    Py_ssize_t *column_order = NULL;
+    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
+    Py_ssize_t *rows_by_index_of_first_nonzero = NULL;
+    TagInt *scratch = PyMem_Malloc((N + R) * sizeof(TagInt *));
+    Lattice *L = NULL;
+    Lattice *relations = NULL;
+    PyObject *result = NULL;
+    if (nonzero_in_column == NULL || bits_in_column == NULL || index_of_first_nonzero == NULL || scratch == NULL) {
+        PyErr_NoMemory();
+        goto error;
+    }
+
     // A first tweak:
     // Earlier columns influence what row operations happen on what that follows them,
     // so we reshuffle the columns so that less populated columns come first.
-    Py_ssize_t *column_weights = PyMem_Calloc(N, sizeof(Py_ssize_t));
-    if (column_weights == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
     for (Py_ssize_t i = 0; i < R; i++) {
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
         for (Py_ssize_t j = 0; j < N; j++) {
-            TagInt t = vec[j];
-            if (!TagInt_is_zero(t)) {
-                column_weights[j] += 1 + TagInt_is_pointer(t);
+            if (TagInt_is_zero(vec[j])) {
+                continue;
             }
-        }
-    }
-    Py_ssize_t *columns_by_increasing_weight = counting_sort(column_weights, N, 2*R + 1);
-    if (columns_by_increasing_weight == NULL) {
-        PyErr_NoMemory();
-        PyMem_Free(column_weights);
-        return NULL;
-    }
-    Py_ssize_t k0 = 0;
-    while (k0 < N && column_weights[columns_by_increasing_weight[k0]] == 0) {
-        // trim away zeros columns
-        k0++;
-    }
-    PyMem_Free(column_weights);
-
-    // A second tweak:
-    // Sort rows by increasing index of first nonzero entry. This allows
-    // the bottom right corner to stay HNF while new rows are added above it.
-    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
-    if (index_of_first_nonzero == NULL) {
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
-    }
-    for (Py_ssize_t i = 0; i < R; i++) {
-        Py_ssize_t index = N;
-        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        for (Py_ssize_t k = k0; k < N; k++) {
-            if (!TagInt_is_zero(vec[columns_by_increasing_weight[k]])) {
-                index = k;
+            nonzero_in_column[j]++;
+            Py_ssize_t numbits = TagInt_bit_length(vec[j]);
+            if (numbits == -1) {
+                goto error;
+            }
+            if (bits_in_column[j] >= PY_SSIZE_T_MAX - numbits) {
+                bits_in_column[j] = PY_SSIZE_T_MAX;
                 break;
             }
+            bits_in_column[j] += numbits;
         }
-        index_of_first_nonzero[i] = index;
     }
-    Py_ssize_t *rows_by_index_of_first_nonzero = counting_sort(index_of_first_nonzero, R, N + 1);
-    PyMem_Free(index_of_first_nonzero);
-    if (rows_by_index_of_first_nonzero == NULL) {
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
+    column_order = counting_sort_order(nonzero_in_column, N);
+    if (column_order == NULL) {
+        goto error;
     }
+    Py_ssize_t k0 = 0; // the first nonzero column
+    while (k0 < N && nonzero_in_column[column_order[k0]] == 0) {
+        k0++;
+    }
+#if 0 // not sure how much this actually helps...
+    // Break nonzero_in_column ties using the total numbers of bits
+    for (Py_ssize_t lo = k0; lo < N; ) {
+        Py_ssize_t nz = nonzero_in_column[column_order[lo]];
+        Py_ssize_t hi = lo;
+        while (hi < N && nonzero_in_column[column_order[hi]] == nz) {
+            hi++;
+        };
+        // insertion sort within each nonzero_in_column value band
+        for (Py_ssize_t k = lo + 1; k < hi; k++) {
+            Py_ssize_t bits = bits_in_column[column_order[k]];
+            Py_ssize_t k_new = k;
+            while (k_new > lo && bits_in_column[column_order[k]] > bits) {
+                column_order[k_new] = column_order[k_new - 1];
+                k_new--;
+            }
+            column_order[k_new] = column_order[k];
+        }
+        lo = hi;
+    }
+#endif
 
+    // A second tweak:
+    // Sort rows by decreasing index of first nonzero entry. This allows
+    // the bottom right corner to stay HNF while new rows are added above it.
+    for (Py_ssize_t i = 0; i < R; i++) {
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
+        Py_ssize_t k = k0;
+        while (k < N && TagInt_is_zero(vec[column_order[k]])) {
+            k++;
+        }
+        index_of_first_nonzero[i] = k;
+    }
+    rows_by_index_of_first_nonzero = counting_sort_order(index_of_first_nonzero, R);
+    if (rows_by_index_of_first_nonzero == NULL) {
+        goto error;
+    }
 
     // Now add everything in in an appropriate order
-    TagInt *scratch = (TagInt *)PyMem_Malloc((N - k0 + R) * sizeof(TagInt *));
-    if (scratch == NULL) {
-        PyMem_Free(rows_by_index_of_first_nonzero);
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
-    }
-    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
+    L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
     if (L == NULL) {
-        PyMem_Free(rows_by_index_of_first_nonzero);
-        PyMem_Free(columns_by_increasing_weight);
-        PyMem_Free(scratch);
-        return NULL;
+        goto error;
     }
     for (Py_ssize_t ii = R-1; ii >= 0; ii--) {
         Py_ssize_t i = rows_by_index_of_first_nonzero[ii];
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
         for (Py_ssize_t k = k0; k < N; k++) {
-            scratch[k - k0] = vec[columns_by_increasing_weight[k]];
+            scratch[k - k0] = vec[column_order[k]];
         }
         memset(scratch + N - k0, 0, R*sizeof(TagInt *));
         scratch[N - k0 + i] = TagInt_ONE;
         if (Lattice_add_vector_impl(L, scratch)) {
-            PyMem_Free(rows_by_index_of_first_nonzero);
-            PyMem_Free(columns_by_increasing_weight);
-            PyMem_Free(scratch);
-            Py_DECREF(L);
-            return NULL;
+            goto error;
         }
     }
-    PyMem_Free(rows_by_index_of_first_nonzero);
-    PyMem_Free(columns_by_increasing_weight);
-    PyMem_Free(scratch);
-    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
-    if (result == NULL) {
-        Py_DECREF(L);
-        return NULL;
+    relations = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
+    if (relations == NULL) {
+        goto error;
     }
     assert(L->rank == R);
     for (Py_ssize_t i = R - 1; i >= 0; i--) {
         if (L->row_to_pivot[i] >= N - k0) {
-            if (Lattice_add_vector_impl(result, L->basis[i] + N - k0)) {
-                Py_DECREF(L);
-                Py_DECREF(result);
-                return NULL;
+            if (Lattice_add_vector_impl(relations, L->basis[i] + N - k0)) {
+                goto error;
             }
         }
     }
+    result = Py_NewRef((PyObject *)relations);
+error:
+    PyMem_Free(nonzero_in_column);
+    PyMem_Free(bits_in_column);
+    PyMem_Free(column_order);
+    PyMem_Free(index_of_first_nonzero);
+    PyMem_Free(rows_by_index_of_first_nonzero);
+    PyMem_Free(scratch);
     Py_DECREF(L);
-    return (PyObject *)result;
+    Py_DECREF(relations);
+    return result;
 }
 
 static PyObject *
