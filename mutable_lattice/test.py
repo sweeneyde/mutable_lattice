@@ -1592,4 +1592,4 @@ class TestDecompose(unittest.TestCase):
         self.assertEqual(L.decompose([[2]]), ([[0],[1],[2]], [Lattice.full(1)]*3))
 
 if __name__ == "__main__":
-    unittest.main(exit=False)
+    unittest.main()

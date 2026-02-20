@@ -4126,8 +4126,8 @@ error:
     PyMem_Free(index_of_first_nonzero);
     PyMem_Free(rows_by_index_of_first_nonzero);
     PyMem_Free(scratch);
-    Py_DECREF(L);
-    Py_DECREF(relations);
+    Py_XDECREF(L);
+    Py_XDECREF(relations);
     return result;
 }
 
