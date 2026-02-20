@@ -84,18 +84,6 @@ PyLong_FromIntptr(intptr_t x)
     return PyLong_FromSsize_t(x);
 }
 
-static Py_ssize_t
-pylong_bit_length(PyObject *x)
-{
-    // This could be faster using a currently unstable API.
-    PyObject *numbits_o = PyObject_CallMethod(x, "bit_length", NULL);
-    if (numbits_o == NULL) {
-        return -1;
-    }
-    Py_ssize_t numbits = PyLong_AsSsize_t(numbits_o);
-    Py_DECREF(numbits_o);
-    return numbits;
-}
 
 /*********************************************************************/
 /* Compiler-specific magic to detect overflows                       */
@@ -343,24 +331,6 @@ TagInt_to_object(TagInt t)
     } else {
         return PyLong_FromIntptr(unpack_integer(t));
     }
-}
-
-static Py_ssize_t
-TagInt_bit_length(TagInt t)
-{
-    if (TagInt_is_pointer(t)) {
-        return pylong_bit_length(untag_pointer(t));
-    }
-    intptr_t x = unpack_integer(t);
-    if (x < 0) {
-        x = -x;
-    }
-    Py_ssize_t res = 0;
-    while (x) {
-        x >>= 1;
-        res++;
-    }
-    return res;
 }
 
 // Puts a new reference in *c.
@@ -4071,7 +4041,6 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     // track of the coefficients needed to do so.
 
     Py_ssize_t *nonzero_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
-    Py_ssize_t *bits_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
     Py_ssize_t *column_order = NULL;
     Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
     Py_ssize_t *rows_by_index_of_first_nonzero = NULL;
@@ -4079,7 +4048,7 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     Lattice *L = NULL;
     Lattice *relations = NULL;
     PyObject *result = NULL;
-    if (nonzero_in_column == NULL || bits_in_column == NULL || index_of_first_nonzero == NULL || scratch == NULL) {
+    if (nonzero_in_column == NULL  || index_of_first_nonzero == NULL || scratch == NULL) {
         PyErr_NoMemory();
         goto error;
     }
@@ -4094,15 +4063,6 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
                 continue;
             }
             nonzero_in_column[j]++;
-            Py_ssize_t numbits = TagInt_bit_length(vec[j]);
-            if (numbits == -1) {
-                goto error;
-            }
-            if (bits_in_column[j] >= PY_SSIZE_T_MAX - numbits) {
-                bits_in_column[j] = PY_SSIZE_T_MAX;
-                break;
-            }
-            bits_in_column[j] += numbits;
         }
     }
     column_order = counting_sort_order(nonzero_in_column, N);
@@ -4113,27 +4073,6 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     while (k0 < N && nonzero_in_column[column_order[k0]] == 0) {
         k0++;
     }
-#if 0 // not sure how much this actually helps...
-    // Break nonzero_in_column ties using the total numbers of bits
-    for (Py_ssize_t lo = k0; lo < N; ) {
-        Py_ssize_t nz = nonzero_in_column[column_order[lo]];
-        Py_ssize_t hi = lo;
-        while (hi < N && nonzero_in_column[column_order[hi]] == nz) {
-            hi++;
-        };
-        // insertion sort within each nonzero_in_column value band
-        for (Py_ssize_t k = lo + 1; k < hi; k++) {
-            Py_ssize_t bits = bits_in_column[column_order[k]];
-            Py_ssize_t k_new = k;
-            while (k_new > lo && bits_in_column[column_order[k]] > bits) {
-                column_order[k_new] = column_order[k_new - 1];
-                k_new--;
-            }
-            column_order[k_new] = column_order[k];
-        }
-        lo = hi;
-    }
-#endif
 
     // A second tweak:
     // Sort rows by decreasing index of first nonzero entry. This allows
@@ -4183,7 +4122,6 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     result = Py_NewRef((PyObject *)relations);
 error:
     PyMem_Free(nonzero_in_column);
-    PyMem_Free(bits_in_column);
     PyMem_Free(column_order);
     PyMem_Free(index_of_first_nonzero);
     PyMem_Free(rows_by_index_of_first_nonzero);
