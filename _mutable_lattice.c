@@ -1987,6 +1987,8 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
 static Py_ssize_t *
 counting_sort_order(Py_ssize_t *inputs, Py_ssize_t length)
 {
+    // sorted(range(length),
+    //        key=inputs.__getitem__)
     Py_ssize_t upper_bound = 1;
     for (Py_ssize_t i = 0; i < length; i++) {
         assert(inputs[i] >= 0);
@@ -2005,6 +2007,7 @@ counting_sort_order(Py_ssize_t *inputs, Py_ssize_t length)
         PyErr_NoMemory();
         return NULL;
     }
+    // https://en.wikipedia.org/wiki/Counting_sort
     for (Py_ssize_t i = 0; i < length; i++) {
         // make a histogram
         assert(inputs[i] < upper_bound);
@@ -4059,10 +4062,9 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     for (Py_ssize_t i = 0; i < R; i++) {
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
         for (Py_ssize_t j = 0; j < N; j++) {
-            if (TagInt_is_zero(vec[j])) {
-                continue;
+            if (!TagInt_is_zero(vec[j])) {
+                nonzero_in_column[j]++;
             }
-            nonzero_in_column[j]++;
         }
     }
     column_order = counting_sort_order(nonzero_in_column, N);
