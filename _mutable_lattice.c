@@ -59,6 +59,7 @@ pylong_lt(PyObject *a, PyObject *b)
         return -1;
     }
     assert(res == Py_True || res == Py_False);
+    Py_DECREF(res);
     return (res == Py_True);
 }
 
@@ -680,9 +681,7 @@ Vector_sq_ass_item(PyObject *self, Py_ssize_t j, PyObject *xo)
         return -1;
     }
     TagInt t;
-    Py_INCREF(xo);
-    if (object_to_TagInt_steal(xo, &t)) {
-        Py_DECREF(xo);
+    if (object_to_TagInt_steal(Py_NewRef(xo), &t)) {
         return -1;
     }
     TagInt *vec = Vector_get_vec(self);
@@ -1985,8 +1984,17 @@ Lattice_new_impl(PyTypeObject *type, Py_ssize_t N, int HNF_policy, Py_ssize_t ma
 }
 
 static Py_ssize_t *
-counting_sort(Py_ssize_t *inputs, Py_ssize_t length, Py_ssize_t upper_bound)
+counting_sort_order(Py_ssize_t *inputs, Py_ssize_t length)
 {
+    // sorted(range(length),
+    //        key=inputs.__getitem__)
+    Py_ssize_t upper_bound = 1;
+    for (Py_ssize_t i = 0; i < length; i++) {
+        assert(inputs[i] >= 0);
+        if (inputs[i] >= upper_bound) {
+            upper_bound = inputs[i] + 1;
+        }
+    }
     Py_ssize_t *count = PyMem_Calloc(upper_bound, sizeof(Py_ssize_t));
     if (count == NULL) {
         PyErr_NoMemory();
@@ -1998,6 +2006,7 @@ counting_sort(Py_ssize_t *inputs, Py_ssize_t length, Py_ssize_t upper_bound)
         PyErr_NoMemory();
         return NULL;
     }
+    // https://en.wikipedia.org/wiki/Counting_sort
     for (Py_ssize_t i = 0; i < length; i++) {
         // make a histogram
         assert(inputs[i] < upper_bound);
@@ -2038,7 +2047,7 @@ insertion_ordering(Py_ssize_t N, PyObject *data)
         }
         index_of_first_nonzero[i] = index;
     }
-    Py_ssize_t *order = counting_sort(index_of_first_nonzero, R, N+1);
+    Py_ssize_t *order = counting_sort_order(index_of_first_nonzero, R);
     PyMem_Free(index_of_first_nonzero);
     return order;
 }
@@ -3145,6 +3154,7 @@ make_pivots_positive(Lattice *L)
             }
         }
     }
+    Py_DECREF(zero);
     return false;
 error:
     Py_DECREF(zero);
@@ -4033,116 +4043,94 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     // Z-linear combination of the input rows. The right portion keeps
     // track of the coefficients needed to do so.
 
+    Py_ssize_t *nonzero_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
+    Py_ssize_t *column_order = NULL;
+    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
+    Py_ssize_t *rows_by_index_of_first_nonzero = NULL;
+    TagInt *scratch = PyMem_Malloc((N + R) * sizeof(TagInt *));
+    Lattice *L = NULL;
+    Lattice *relations = NULL;
+    PyObject *result = NULL;
+    if (nonzero_in_column == NULL  || index_of_first_nonzero == NULL || scratch == NULL) {
+        PyErr_NoMemory();
+        goto error;
+    }
+
     // A first tweak:
     // Earlier columns influence what row operations happen on what that follows them,
     // so we reshuffle the columns so that less populated columns come first.
-    Py_ssize_t *column_weights = PyMem_Calloc(N, sizeof(Py_ssize_t));
-    if (column_weights == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
     for (Py_ssize_t i = 0; i < R; i++) {
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
         for (Py_ssize_t j = 0; j < N; j++) {
-            TagInt t = vec[j];
-            if (!TagInt_is_zero(t)) {
-                column_weights[j] += 1 + TagInt_is_pointer(t);
+            if (!TagInt_is_zero(vec[j])) {
+                nonzero_in_column[j]++;
             }
         }
     }
-    Py_ssize_t *columns_by_increasing_weight = counting_sort(column_weights, N, 2*R + 1);
-    if (columns_by_increasing_weight == NULL) {
-        PyErr_NoMemory();
-        PyMem_Free(column_weights);
-        return NULL;
+    column_order = counting_sort_order(nonzero_in_column, N);
+    if (column_order == NULL) {
+        goto error;
     }
-    Py_ssize_t k0 = 0;
-    while (k0 < N && column_weights[columns_by_increasing_weight[k0]] == 0) {
-        // trim away zeros columns
+    Py_ssize_t k0 = 0; // the first nonzero column
+    while (k0 < N && nonzero_in_column[column_order[k0]] == 0) {
         k0++;
     }
-    PyMem_Free(column_weights);
 
     // A second tweak:
-    // Sort rows by increasing index of first nonzero entry. This allows
+    // Sort rows by decreasing index of first nonzero entry. This allows
     // the bottom right corner to stay HNF while new rows are added above it.
-    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
-    if (index_of_first_nonzero == NULL) {
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
-    }
     for (Py_ssize_t i = 0; i < R; i++) {
-        Py_ssize_t index = N;
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        for (Py_ssize_t k = k0; k < N; k++) {
-            if (!TagInt_is_zero(vec[columns_by_increasing_weight[k]])) {
-                index = k;
-                break;
-            }
+        Py_ssize_t k = k0;
+        while (k < N && TagInt_is_zero(vec[column_order[k]])) {
+            k++;
         }
-        index_of_first_nonzero[i] = index;
+        index_of_first_nonzero[i] = k;
     }
-    Py_ssize_t *rows_by_index_of_first_nonzero = counting_sort(index_of_first_nonzero, R, N + 1);
-    PyMem_Free(index_of_first_nonzero);
+    rows_by_index_of_first_nonzero = counting_sort_order(index_of_first_nonzero, R);
     if (rows_by_index_of_first_nonzero == NULL) {
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
+        goto error;
     }
-
 
     // Now add everything in in an appropriate order
-    TagInt *scratch = (TagInt *)PyMem_Malloc((N - k0 + R) * sizeof(TagInt *));
-    if (scratch == NULL) {
-        PyMem_Free(rows_by_index_of_first_nonzero);
-        PyMem_Free(columns_by_increasing_weight);
-        PyErr_NoMemory();
-        return NULL;
-    }
-    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
+    L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
     if (L == NULL) {
-        PyMem_Free(rows_by_index_of_first_nonzero);
-        PyMem_Free(columns_by_increasing_weight);
-        PyMem_Free(scratch);
-        return NULL;
+        goto error;
     }
     for (Py_ssize_t ii = R-1; ii >= 0; ii--) {
         Py_ssize_t i = rows_by_index_of_first_nonzero[ii];
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
         for (Py_ssize_t k = k0; k < N; k++) {
-            scratch[k - k0] = vec[columns_by_increasing_weight[k]];
+            scratch[k - k0] = vec[column_order[k]];
         }
         memset(scratch + N - k0, 0, R*sizeof(TagInt *));
         scratch[N - k0 + i] = TagInt_ONE;
         if (Lattice_add_vector_impl(L, scratch)) {
-            PyMem_Free(rows_by_index_of_first_nonzero);
-            PyMem_Free(columns_by_increasing_weight);
-            PyMem_Free(scratch);
-            Py_DECREF(L);
-            return NULL;
+            goto error;
         }
     }
-    PyMem_Free(rows_by_index_of_first_nonzero);
-    PyMem_Free(columns_by_increasing_weight);
-    PyMem_Free(scratch);
-    Lattice *result = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
-    if (result == NULL) {
-        Py_DECREF(L);
-        return NULL;
+    relations = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
+    if (relations == NULL) {
+        goto error;
     }
     assert(L->rank == R);
     for (Py_ssize_t i = R - 1; i >= 0; i--) {
         if (L->row_to_pivot[i] >= N - k0) {
-            if (Lattice_add_vector_impl(result, L->basis[i] + N - k0)) {
-                Py_DECREF(L);
-                Py_DECREF(result);
-                return NULL;
+            if (Lattice_add_vector_impl(relations, L->basis[i] + N - k0)) {
+                goto error;
             }
         }
     }
-    Py_DECREF(L);
-    return (PyObject *)result;
+    result = Py_NewRef((PyObject *)relations);
+error:
+    PyMem_Free(nonzero_in_column);
+    PyMem_Free(column_order);
+    PyMem_Free(index_of_first_nonzero);
+    PyMem_Free(rows_by_index_of_first_nonzero);
+    PyMem_Free(scratch);
+    Py_XDECREF(L);
+    Py_XDECREF(relations);
+    return result;
 }
 
 static PyObject *

@@ -1,0 +1,24 @@
+name: Check for refleaks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  hunt_refleaks:
+    runs-on: ubuntu-latest
+    name: Check for refleaks
+    steps:
+      - uses: actions/checkout@v2
+      - uses: deadsnakes/action@v3.2.0
+        with:
+          python-version: 3.11-dev
+          debug: true
+      - name: Build package
+        run: python -m pip install ./ -v
+      - name: Check for reference leaks
+        run: python -m mutable_lattice.test_refleaks

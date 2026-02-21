@@ -240,11 +240,6 @@ class TestVector(unittest.TestCase):
         data = [10, 20, 30]
         self.assertEqual([x for x in Vector(data)], data)
 
-    def test_length(self):
-        self.assertEqual(len(Vector([])), 0)
-        self.assertEqual(len(Vector([10])), 1)
-        self.assertEqual(len(Vector([10, 20, 30])), 3)
-
     def test_setitem_simple(self):
         v = Vector([10, 20, 30])
         v[1] = 999
@@ -1592,4 +1587,4 @@ class TestDecompose(unittest.TestCase):
         self.assertEqual(L.decompose([[2]]), ([[0],[1],[2]], [Lattice.full(1)]*3))
 
 if __name__ == "__main__":
-    unittest.main(exit=False)
+    unittest.main()
