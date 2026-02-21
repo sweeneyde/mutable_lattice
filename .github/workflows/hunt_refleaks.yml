@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v2
       - uses: deadsnakes/action@v3.2.0
         with:
-          python-version: 3.10-dev
+          python-version: 3.11-dev
           debug: true
       - name: Build package
         run: python -m pip install ./ -v
