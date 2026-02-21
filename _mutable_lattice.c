@@ -59,6 +59,7 @@ pylong_lt(PyObject *a, PyObject *b)
         return -1;
     }
     assert(res == Py_True || res == Py_False);
+    Py_DECREF(res);
     return (res == Py_True);
 }
 
@@ -680,9 +681,7 @@ Vector_sq_ass_item(PyObject *self, Py_ssize_t j, PyObject *xo)
         return -1;
     }
     TagInt t;
-    Py_INCREF(xo);
-    if (object_to_TagInt_steal(xo, &t)) {
-        Py_DECREF(xo);
+    if (object_to_TagInt_steal(Py_NewRef(xo), &t)) {
         return -1;
     }
     TagInt *vec = Vector_get_vec(self);
@@ -3155,6 +3154,7 @@ make_pivots_positive(Lattice *L)
             }
         }
     }
+    Py_DECREF(zero);
     return false;
 error:
     Py_DECREF(zero);
