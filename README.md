@@ -382,8 +382,8 @@ More generally, we can shuffle the entries of the `Vector`
 Using some function from `range(len(v))` to `range(result_size)`,
 represented as a "action" `Vector`.
 If `result_size` is not provided, it defaults to `len(v)`.
-If the has duplicate entries `a[j1] == a[j2] == ...`,
-then `v.shuffled_by_action(a)[a[j1]]` will be their sum `a[j1] + a[j2] + ...`,
+If the action `a` has duplicate entries `a[j1] == a[j2] == ...`,
+then `v.shuffled_by_action(a)[a[j1]]` will be their sum `v[j1] + v[j2] + ...`,
 so each action `Vector` specifies a linear operation.
 
 ```pycon
