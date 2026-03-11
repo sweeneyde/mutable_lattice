@@ -1442,6 +1442,17 @@ class TestKernelsWithDecomposition(TestKernels, unittest.TestCase):
 
 class TestDecomposeRelationsAmong(unittest.TestCase):
     def test_decompose_relations_among_basic(self):
+        self.assertEqual(decompose_relations_among([]), ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0])]),
+                         ([Vector([1])], [], []))
+        self.assertEqual(decompose_relations_among([Vector([17])]),
+                         ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0, 17, 0])]),
+                         ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0, 0, 0])]),
+                         ([Vector([1])], [], []))
+        self.assertEqual(decompose_relations_among([Vector([1,2,3])]),
+                         ([], [], []))
         self.assertEqual(
             # find zero rows
             decompose_relations_among([
@@ -1463,6 +1474,15 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
              [],
              [])
         )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,1]),
+                Vector([0,0]),
+                Vector([2,2]),
+            ]),
+            ([Vector([0,1,0])], [Vector([0,2])], [[Vector([1,1]),
+                                                   Vector([2,2])]])
+        )
         # deduplicate
         self.assertEqual(
             decompose_relations_among([
@@ -1473,6 +1493,29 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
             ([Vector([1,0,-1]), Vector([0,1,-1])],
              [],
              [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([10**k for k in range(100)]),
+                Vector([10**k for k in range(100)]),
+                Vector([10**k for k in range(100)]),
+            ]),
+            ([Vector([1,0,-1]), Vector([0,1,-1])],
+             [],
+             [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,1]),
+                Vector([2,2]),
+                Vector([2,2]),
+                Vector([3,3]),
+                Vector([3,3]),
+                Vector([3,3]),
+            ]),
+            ([Vector([0,1,-1,0,0,0]),Vector([0,0,0,1,0,-1]),Vector([0,0,0,0,1,-1])],
+             [Vector([0, 2, 5])],
+             [[Vector([1,1]), Vector([2,2]), Vector([3,3])]])
         )
         # split into smaller problems
         self.assertEqual(
@@ -1494,6 +1537,17 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
             ]),
             ([],
              [Vector([0, 1]), Vector([2, 3])],
+             [[Vector([1,1]),Vector([2,2])], [Vector([3,3]),Vector([4,4])]])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,0,1,0]),
+                Vector([2,0,2,0]),
+                Vector([0,3,0,3]),
+                Vector([0,4,0,4]),
+            ]),
+            ([],
+             [Vector([0,1]), Vector([2,3])],
              [[Vector([1,1]),Vector([2,2])], [Vector([3,3]),Vector([4,4])]])
         )
         # All together now
@@ -1534,7 +1588,15 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
             decompose_relations_among([Vector([0]*i + [1]*(100-i)) for i in range(100)]),
             ([], [], [])
         )
-
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,2,0,0]),
+                Vector([1,2,0,0]),
+                Vector([3,4,5,6]),
+                Vector([3,4,5,6]),
+            ]),
+            ([Vector([1, -1, 0, 0]), Vector([0, 0, 1, -1])], [], [])
+        )
 
 
 class TestTranspose(unittest.TestCase):
