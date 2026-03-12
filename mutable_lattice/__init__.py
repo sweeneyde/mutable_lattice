@@ -4,7 +4,7 @@ from _mutable_lattice import (
     generalized_row_op,
     Lattice,
     xgcd,
-    relations_among as relations_among_c,
+    relations_among_c,
     decompose_relations_among,
     transpose,
 )

@@ -1763,7 +1763,6 @@ bisect_left(Py_ssize_t *a, Py_ssize_t lo, Py_ssize_t hi, Py_ssize_t x)
 static PyObject *
 Lattice__assert_consistent(PyObject *self, PyObject *Py_UNUSED(other))
 {
-    // printf("asserting consistent\n");
     Lattice *L = (Lattice *)self;
     Py_ssize_t N = L->N;
     Py_ssize_t R = L->rank;
@@ -4191,11 +4190,13 @@ transpose(PyObject *Py_UNUSED(mod), PyObject *const *args, Py_ssize_t nargs)
 }
 
 static bool
-Vector_cmp(TagInt *a, TagInt *b, Py_ssize_t N, int *res)
+Vector_cmp(PyObject *arg, Py_ssize_t i1, Py_ssize_t i2, Py_ssize_t N, int *res)
 {
+    TagInt *a = Vector_get_vec(PyList_GET_ITEM(arg, i1));
+    TagInt *b = Vector_get_vec(PyList_GET_ITEM(arg, i2));
     // Compare two vectors of equal length.
     // This isn't a useful order--it just has to be a total order
-    // so that we can efficiently deduplicate
+    // so that we can efficiently deduplicate.
     for (Py_ssize_t j = 0; j < N; j++) {
         if (a[j].bits == b[j].bits) {
             continue;
@@ -4281,11 +4282,7 @@ mergesort_vectors(PyObject *arg)
                     continue;
                 }
                 int cmp;
-                if (Vector_cmp(
-                    Vector_get_vec(PyList_GET_ITEM(arg, arr1[left])),
-                    Vector_get_vec(PyList_GET_ITEM(arg, arr1[right])),
-                    N, &cmp
-                )) {
+                if (Vector_cmp(arg, arr1[left], arr1[right], N, &cmp)) {
                     goto error;
                 }
                 if (cmp <= 0) {
@@ -4353,6 +4350,7 @@ cross_off_rows_and_columns(PyObject *arg, char *col_active, char *row_active)
                 i++;
                 assert(i < R);
             }
+            assert(row_active[i] && col_active[j]);
             row_active[i] = 0;
             col_active[j] = 0;
             TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
@@ -4381,104 +4379,109 @@ static bool
 partition_active_columns(
     PyObject *arg, char *col_active, char *row_active,
     Py_ssize_t *p_num_components,
-    Py_ssize_t **p_component_to_size,
-    Py_ssize_t **p_cols_by_component,
-    Py_ssize_t ***p_components
+    Py_ssize_t **p_component_to_num_rows,
+    Py_ssize_t **p_component_to_num_cols,
+    Py_ssize_t **p_rows_by_component,
+    Py_ssize_t **p_cols_by_component
 )
 {
     Py_ssize_t R = PyList_GET_SIZE(arg);
     Py_ssize_t N = Py_SIZE(PyList_GET_ITEM(arg, 0));
-    Py_ssize_t *uf_parent = PyMem_Malloc(N*sizeof(Py_ssize_t));
-    Py_ssize_t *uf_size = PyMem_Malloc(N*sizeof(Py_ssize_t));
-    Py_ssize_t *root_to_component_index = PyMem_Malloc(N*sizeof(Py_ssize_t));
-    Py_ssize_t *component_to_size = NULL;
-    Py_ssize_t *component_to_index = NULL;
-    Py_ssize_t *cols_by_component = NULL;
-    Py_ssize_t **components = NULL;
-    if (!(uf_parent && uf_size && root_to_component_index)) {
-        PyErr_NoMemory();
-        goto error;
+    Py_ssize_t num_active_rows = 0;
+    for (Py_ssize_t i = 0; i < R; i++) {
+        if (row_active[i]) {
+            num_active_rows++;
+        }
     }
-    Py_ssize_t num_cols_active = 0;
+    Py_ssize_t num_active_cols = 0;
     for (Py_ssize_t j = 0; j < N; j++) {
         if (col_active[j]) {
-            uf_parent[j] = j;
-            uf_size[j] = 1;
-            num_cols_active++;
+            num_active_cols++;
         }
+    }
+    Py_ssize_t max_num_components = Py_MIN(num_active_rows, num_active_cols);
+    Py_ssize_t *rowstack = PyMem_Malloc(num_active_rows * sizeof(Py_ssize_t));
+    Py_ssize_t *colstack = PyMem_Malloc(num_active_cols * sizeof(Py_ssize_t));
+    Py_ssize_t *row_to_component = PyMem_Malloc(R * sizeof(Py_ssize_t));
+    Py_ssize_t *col_to_component = PyMem_Malloc(N * sizeof(Py_ssize_t));
+    Py_ssize_t *component_to_num_rows = PyMem_Calloc(max_num_components, sizeof(Py_ssize_t));
+    Py_ssize_t *component_to_num_cols = PyMem_Calloc(max_num_components, sizeof(Py_ssize_t));
+    Py_ssize_t *rows_by_component = PyMem_Malloc(num_active_rows * sizeof(Py_ssize_t));
+    Py_ssize_t *cols_by_component = PyMem_Malloc(num_active_cols * sizeof(Py_ssize_t));
+    Py_ssize_t num_components = 0;
+    Py_ssize_t rowstacktop = 0, colstacktop = 0;
+    Py_ssize_t num_rows_done = 0, num_cols_done = 0;
+    if (!(rowstack && colstack &&
+          row_to_component && col_to_component &&
+          component_to_num_rows && component_to_num_cols &&
+          rows_by_component && cols_by_component
+    )) {
+        PyErr_NoMemory();
+        PyMem_Free(rowstack); PyMem_Free(colstack);
+        PyMem_Free(row_to_component); PyMem_Free(col_to_component);
+        PyMem_Free(component_to_num_rows); PyMem_Free(component_to_num_cols);
+        PyMem_Free(rows_by_component); PyMem_Free(cols_by_component);
+        return true;
     }
     for (Py_ssize_t i = 0; i < R; i++) {
-        if (!row_active[i]) {
+        row_to_component[i] = -1;
+    }
+    for (Py_ssize_t j = 0; j < N; j++) {
+        col_to_component[j] = -1;
+    }
+    // Explore the bipartite graph of rows and columns
+    // connected whenever they intersect at a nonzero entry.
+    for (Py_ssize_t i0 = 0; i0 < R; i0++) {
+        if (!row_active[i0] || row_to_component[i0] >= 0) {
             continue;
         }
-        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        Py_ssize_t j0 = 0;
-        while (!col_active[j0] || TagInt_is_zero(vec[j0])) {
-            j0++;
-        }
-        assert(j0 < N && col_active[j0] && !TagInt_is_zero(vec[j0]));
-        for (Py_ssize_t j1 = j0 + 1; j1 < N; j1++) {
-            if (col_active[j1] && !TagInt_is_zero(vec[j1])) {
-                uf_union(uf_parent, uf_size, j0, j1);
+        Py_ssize_t k = num_components++;
+        assert(rowstacktop < num_active_rows);
+        rowstack[rowstacktop++] = i0;
+        row_to_component[i0] = k;
+        assert(rowstacktop < num_active_rows);
+        rows_by_component[num_rows_done++] = i0;
+        component_to_num_rows[k]++;
+        while (rowstacktop || colstacktop) {
+            while (rowstacktop) {
+                Py_ssize_t i = rowstack[--rowstacktop];
+                TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
+                for (Py_ssize_t j = 0; j < N; j++) {
+                    if (col_active[j] && col_to_component[j] < 0
+                        && !TagInt_is_zero(vec[j]))
+                    {
+                        colstack[colstacktop++] = j;
+                        col_to_component[j] = k;
+                        cols_by_component[num_cols_done++] = j;
+                        component_to_num_cols[k]++;
+                    }
+                }
+            }
+            while (colstacktop) {
+                Py_ssize_t j = colstack[--colstacktop];
+                for (Py_ssize_t i = 0; i < R; i++) {
+                    if (row_active[i] && row_to_component[i] < 0
+                        && !TagInt_is_zero(Vector_get_vec(PyList_GET_ITEM(arg, i))[j]))
+                    {
+                        rowstack[rowstacktop++] = i;
+                        row_to_component[i] = k;
+                        rows_by_component[num_rows_done++] = i;
+                        component_to_num_rows[k]++;
+                    }
+                }
             }
         }
     }
-    Py_ssize_t num_components = 0;
-    for (Py_ssize_t j = 0; j < N; j++) {
-        if (col_active[j]) {
-            Py_ssize_t fj = uf_find(uf_parent, j);
-            uf_parent[j] = fj;
-            if (j == fj) {
-                root_to_component_index[j] = num_components++;
-            }
-        }
-    }
-    component_to_size = PyMem_Calloc(num_components, sizeof(Py_ssize_t));
-    component_to_index = PyMem_Malloc(num_components * sizeof(Py_ssize_t));
-    cols_by_component = PyMem_Malloc(num_cols_active * sizeof(Py_ssize_t));
-    components = PyMem_Malloc(num_components * sizeof(Py_ssize_t *));
-    if (!(component_to_size && cols_by_component && components)) {
-        PyErr_NoMemory();
-        goto error;
-    }
-    for (Py_ssize_t j = 0; j < N; j++) {
-        if (col_active[j] && uf_parent[j] == j) {
-            component_to_size[root_to_component_index[j]] = uf_size[j];
-        }
-    }
-    // Sort columns into the components, similar to a counting sort.
-    Py_ssize_t sum = 0;
-    for (Py_ssize_t k = 0; k < num_components; k++) {
-        components[k] = &cols_by_component[sum]; // points to the start of each slice
-        sum += component_to_size[k];
-        component_to_index[k] = sum; // indexes of the end of each slice
-    }
-    for (Py_ssize_t j = N - 1; j >= 0; j--) {
-        if (col_active[j]) {
-            cols_by_component[--component_to_index[root_to_component_index[uf_parent[j]]]] = j;
-        }
-    }
-    for (Py_ssize_t k = 0; k < num_components; k++) {
-        assert(components[k] == &cols_by_component[component_to_index[k]]);
-    }
-    PyMem_Free(uf_parent);
-    PyMem_Free(uf_size);
-    PyMem_Free(root_to_component_index);
-    PyMem_Free(component_to_index);
+    assert(num_rows_done == num_active_rows);
+    assert(num_cols_done == num_active_cols);
+    PyMem_Free(rowstack); PyMem_Free(colstack);
+    PyMem_Free(row_to_component); PyMem_Free(col_to_component);
     *p_num_components = num_components;
-    *p_component_to_size = component_to_size;
+    *p_component_to_num_rows = component_to_num_rows;
+    *p_component_to_num_cols = component_to_num_cols;
+    *p_rows_by_component = rows_by_component;
     *p_cols_by_component = cols_by_component;
-    *p_components = components;
     return false;
-error:
-    PyMem_Free(uf_parent);
-    PyMem_Free(uf_size);
-    PyMem_Free(root_to_component_index);
-    PyMem_Free(component_to_size);
-    PyMem_Free(component_to_index);
-    PyMem_Free(cols_by_component);
-    PyMem_Free(components);
-    return true;
 }
 
 static bool
@@ -4534,7 +4537,8 @@ static PyObject *
 decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
 {
     if (!PyList_CheckExact(arg)) {
-        PyErr_SetString(PyExc_TypeError, "decompose_relations_among(vecs) argument must be a list");
+        PyErr_SetString(PyExc_TypeError,
+            "decompose_relations_among(vecs) argument must be a list");
         return NULL;
     }
     Py_ssize_t R = PyList_GET_SIZE(arg);
@@ -4545,14 +4549,16 @@ decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     for (Py_ssize_t i = 0; i < R; i++) {
         PyObject *v = PyList_GET_ITEM(arg, i);
         if (Py_TYPE(v) != &Vector_Type) {
-            PyErr_SetString(PyExc_TypeError, "decompose_relations_among(vecs) argument must be a list of Vectors");
+            PyErr_SetString(PyExc_TypeError,
+                "decompose_relations_among(vecs) argument must be a list of Vectors");
             return NULL;
         }
         if (i == 0) {
             N = Py_SIZE(v);
         } else {
             if (Py_SIZE(v) != N) {
-                PyErr_SetString(PyExc_ValueError, "length mismatch in decompose_relations_among");
+                PyErr_SetString(PyExc_ValueError,
+                    "length mismatch in decompose_relations_among");
                 return NULL;
             }
         }
@@ -4568,11 +4574,10 @@ decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     char *row_active = NULL;
     char *col_active = NULL;
     Py_ssize_t *sorted_rows = NULL;
-    Py_ssize_t *component_to_size = NULL;
+    Py_ssize_t *component_to_num_rows = NULL;
+    Py_ssize_t *component_to_num_cols = NULL;
+    Py_ssize_t *rows_by_component = NULL;
     Py_ssize_t *cols_by_component = NULL;
-    Py_ssize_t **components = NULL;
-    Py_ssize_t *rows = NULL;
-
     if (!(easy_relations_list = PyList_New(0))) {
         goto error;
     }
@@ -4582,10 +4587,7 @@ decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     if (!(subproblems_list = PyList_New(0))) {
         goto error;
     }
-    if (!(row_active = PyMem_Malloc(R)) ||
-        !(col_active = PyMem_Malloc(N)) ||
-        !(rows = PyMem_Malloc(R * sizeof(Py_ssize_t)))
-    ) {
+    if (!(row_active = PyMem_Malloc(R)) || !(col_active = PyMem_Malloc(N))) {
         PyErr_NoMemory();
         return NULL;
     }
@@ -4617,17 +4619,13 @@ decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     if (!(sorted_rows = mergesort_vectors(arg))) {
         goto error;
     }
-    for (Py_ssize_t ii0 = 0; ii0 < R;) {
+    for (Py_ssize_t ii0 = 0; ii0 < R; ) {
         Py_ssize_t ii1 = ii0 + 1;
         for (; ii1 < R; ii1++) {
             // extend the streak sorted_rows[ii0:ii1]
             assert(ii0 < R && ii1 < R);
             int cmp;
-            if (Vector_cmp(
-                Vector_get_vec(PyList_GET_ITEM(arg, sorted_rows[ii0])),
-                Vector_get_vec(PyList_GET_ITEM(arg, sorted_rows[ii1])),
-                N, &cmp
-            )) {
+            if (Vector_cmp(arg, sorted_rows[ii0], sorted_rows[ii1], N, &cmp)) {
                 goto error;
             }
             assert(cmp <= 0);
@@ -4661,39 +4659,28 @@ decompose_relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     // Step 4: Find which columns have nonzero entries in the same row.
     Py_ssize_t num_components;
     if (partition_active_columns(
-        arg, col_active, row_active,
-        &num_components, &component_to_size, &cols_by_component, &components
+        arg, col_active, row_active, &num_components,
+        &component_to_num_rows, &component_to_num_cols,
+        &rows_by_component, &cols_by_component
     )) {
         goto error;
     }
     // Step 5: Make each subproblem of the decomposition
+    Py_ssize_t num_rows_done = 0;
+    Py_ssize_t num_cols_done = 0;
     for (Py_ssize_t k = 0; k < num_components; k++) {
-        Py_ssize_t num_cols = component_to_size[k];
-        Py_ssize_t *cols = components[k];
-        Py_ssize_t num_rows = 0;
-        for (Py_ssize_t i = 0; i < R; i++) {
-            // find the rows associated to this component.
-            if (!row_active[i]) {
-                continue;
-            }
-            TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-            Py_ssize_t jj = 0;
-            for (; jj < num_cols; jj++) {
-                if (!TagInt_is_zero(vec[cols[jj]])) {
-                    break;
-                }
-            }
-            if (jj < num_cols) {
-                // broke out early: found a nonzero entry
-                rows[num_rows++] = i;
-            }
-        }
+        Py_ssize_t num_cols = component_to_num_cols[k];
+        Py_ssize_t num_rows = component_to_num_rows[k];
+        Py_ssize_t *cols = &cols_by_component[num_cols_done];
+        Py_ssize_t *rows = &rows_by_component[num_rows_done];
         if (append_subproblem(
             arg, cols, num_cols, rows, num_rows,
             subproblem_rows_list, subproblems_list
         )) {
             goto error;
         }
+        num_cols_done += num_cols;
+        num_rows_done += num_rows;
     }
     result = PyTuple_Pack(3, easy_relations_list,
                              subproblem_rows_list,
@@ -4705,10 +4692,10 @@ error:
     PyMem_Free(row_active);
     PyMem_Free(col_active);
     PyMem_Free(sorted_rows);
-    PyMem_Free(component_to_size);
+    PyMem_Free(component_to_num_rows);
+    PyMem_Free(component_to_num_cols);
+    PyMem_Free(rows_by_component);
     PyMem_Free(cols_by_component);
-    PyMem_Free(components);
-    PyMem_Free(rows);
     return result;
 }
 
@@ -4749,8 +4736,8 @@ static PyMethodDef mutable_lattice_methods[] = {
      "generalized_row_op(v, w, a, b, c, d) does (v, w) = (a*v+b*w, c*v+d*w) when v and w are Vectors"},
     {"xgcd", (PyCFunction)(void(*)(void))xgcd, METH_FASTCALL,
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
-    {"relations_among", relations_among, METH_O,
-     "relations_among([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
+    {"relations_among_c", relations_among, METH_O,
+     "relations_among_c([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
     {"decompose_relations_among", decompose_relations_among, METH_O,
      "decompose_relations_among([v0, ..., vk]) reduces a relations_among calculation to sub-problems. "
      "It returns a 3-tuple (easy_relations: list[Vector], subproblem_rows : list[Vector], subproblems: list[list[Vector]])"},

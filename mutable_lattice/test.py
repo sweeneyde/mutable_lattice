@@ -369,11 +369,10 @@ class TestRowOps(unittest.TestCase):
 
     def test_generalized_row_op_many(self):
         VALUES = list(self.VALUES)
-        random.Random(0).shuffle(VALUES)
         vx_data = [x for x in VALUES for _ in VALUES]
         vy_data = [y for _ in VALUES for y in VALUES]
-        for i in range(len(VALUES) - 4):
-            a, b, c, d = VALUES[i:i+4]
+        for _ in range(20):
+            a, b, c, d = random.choices(VALUES, k=4)
             vx = Vector(vx_data)
             vy = Vector(vy_data)
             new_vx = a*vx + b*vy
@@ -1453,8 +1452,8 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
                          ([Vector([1])], [], []))
         self.assertEqual(decompose_relations_among([Vector([1,2,3])]),
                          ([], [], []))
+        # find zero rows
         self.assertEqual(
-            # find zero rows
             decompose_relations_among([
                 Vector([]),
                 Vector([]),
@@ -1598,6 +1597,47 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
             ([Vector([1, -1, 0, 0]), Vector([0, 0, 1, -1])], [], [])
         )
 
+    def test_decompose_relations_among_random(self):
+        def random_cases():
+            for R in range(5):
+                for N in range(5):
+                    for num_nonzero in range(N*R):
+                        for _ in range(3):
+                            xs = random.choices((-1,0,1,2), k=num_nonzero)
+                            places = random.sample(range(N*R), k=num_nonzero)
+                            data = [Vector.zero(N) for _ in range(R)]
+                            for place, x in zip(places, xs):
+                                i, j = divmod(place, N)
+                                data[i][j] = x
+                            yield R, N, data
+        for R, N, data in random_cases():
+            easy_relations, subproblem_rows, subproblems = decompose_relations_among(data)
+            for rel in easy_relations:
+                nz = list(filter(rel.__getitem__, range(R)))
+                if len(nz) == 1:
+                    [j] = nz
+                    self.assertEqual(rel[j], 1)
+                    self.assertEqual(data[j], Vector.zero(N))
+                else:
+                    [j1, j2] = nz
+                    self.assertEqual([rel[j1], rel[j2]], [1, -1])
+                    self.assertEqual(data[j1], data[j2])
+            total_rank = Lattice(N, data).rank
+            total_nullity = len(easy_relations)
+            for rows, subproblem in zip(subproblem_rows, subproblems, strict=True):
+                for i, v in zip(rows, subproblem):
+                    self.assertEqual(sorted(filter(None, data[i])),
+                                     sorted(filter(None, v)))
+                    self.assertTrue(any(v))
+                for col in zip(*subproblem):
+                    self.assertGreaterEqual(len(list(filter(None, col))), 2)
+                for k in relations_among_c(subproblem).get_basis():
+                    v = Vector.zero(N)
+                    for i, x in zip(rows, k, strict=True):
+                        v += x * data[i]
+                    self.assertEqual(v, Vector.zero(N))
+                    total_nullity += 1
+            self.assertEqual(total_rank + total_nullity, R)
 
 class TestTranspose(unittest.TestCase):
     def setUp(self):
