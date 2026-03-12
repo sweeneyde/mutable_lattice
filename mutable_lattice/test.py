@@ -10,7 +10,9 @@ from . import (
     generalized_row_op,
     Lattice,
     xgcd,
-    relations_among,
+    relations_among_c,
+    relations_among_with_decomposition,
+    decompose_relations_among,
     transpose,
 )
 from .pylattice import PyLattice
@@ -367,11 +369,10 @@ class TestRowOps(unittest.TestCase):
 
     def test_generalized_row_op_many(self):
         VALUES = list(self.VALUES)
-        random.Random(0).shuffle(VALUES)
         vx_data = [x for x in VALUES for _ in VALUES]
         vy_data = [y for _ in VALUES for y in VALUES]
-        for i in range(len(VALUES) - 4):
-            a, b, c, d = VALUES[i:i+4]
+        for _ in range(20):
+            a, b, c, d = random.choices(VALUES, k=4)
             vx = Vector(vx_data)
             vy = Vector(vy_data)
             new_vx = a*vx + b*vy
@@ -1316,7 +1317,10 @@ class TestLatticeAPI(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different ambient dimensions"):
             L1 < L2
 
-class TestKernels(unittest.TestCase):
+class TestKernels:
+    def ker(self, vecs):
+        raise NotImplementedError
+
     def setUp(self):
         self.VALUES = make_some_values()
 
@@ -1324,38 +1328,69 @@ class TestKernels(unittest.TestCase):
         self.VALUES.clear()
         del self.VALUES
 
-    def test_relations_among(self):
+    def test_relations_among_basic(self):
         self.assertEqual(
-            relations_among([Vector([10]*100), Vector([20]*100)]),
-            Lattice(2, [[2, -1]])
-        )
-        self.assertEqual(
-            relations_among([Vector([60]), Vector([100]), Vector([150])]),
-            Lattice(3, [[5, -3, 0], [0, 3, -2]])
-        )
-        self.assertEqual(
-            relations_among([]),
+            self.ker([]),
             Lattice(0),
         )
         self.assertEqual(
-            relations_among([Vector([]), Vector([]), Vector([])]),
-            Lattice.full(3),
-        ),
-        self.assertEqual(
-            relations_among([Vector([17])]),
+            self.ker([Vector([17])]),
             Lattice(1),
         )
         self.assertEqual(
-            relations_among([Vector([17]), Vector([0])]),
+            self.ker([Vector([]), Vector([]), Vector([])]),
+            Lattice.full(3),
+        ),
+        self.assertEqual(
+            self.ker([Vector([17]), Vector([0])]),
             Lattice(2, [[0, 1]]),
         )
         self.assertEqual(
-            relations_among([Vector([0, 0, 0])]*100),
+            self.ker([Vector([10]), Vector([20])]),
+            Lattice(2, [[2, -1]])
+        )
+        self.assertEqual(
+            self.ker([Vector([10, 100]), Vector([20, 200])]),
+            Lattice(2, [[2, -1]])
+        )
+        self.assertEqual(
+            self.ker([Vector([10]*100), Vector([20]*100)]),
+            Lattice(2, [[2, -1]])
+        )
+        self.assertEqual(
+            self.ker([Vector([60]), Vector([100]), Vector([150])]),
+            Lattice(3, [[5, -3, 0], [0, 3, -2]])
+        )
+        self.assertEqual(
+            self.ker([Vector([0, 0, 0])]*100),
             Lattice.full(100)
+        )
+        self.assertEqual(
+            self.ker([Vector([-1, -1]), Vector([-2, 0])]),
+            Lattice(2)
+        )
+        self.assertEqual(
+            self.ker([Vector([1, 1]), Vector([0, 1])]),
+            Lattice(2)
+        )
+        self.assertEqual(
+            self.ker([
+                Vector([0,0,0,5,5,5,0]),
+                Vector([0,1,2,0,0,0,0]),
+                Vector([0,2,4,0,0,0,0]),
+                Vector([0,0,0,0,0,0,0]),
+                Vector([0,0,0,0,3,3,0]),
+                Vector([0,0,0,0,1,1,0]),
+                Vector([0,0,0,0,0,0,0]),
+            ]),
+            Lattice(7, [[0, 2,-1, 0, 0, 0, 0],
+                        [0, 0, 0, 1, 0, 0, 0],
+                        [0, 0, 0, 0, 1,-3, 0],
+                        [0, 0, 0, 0, 0, 0, 1]])
         )
         # From https://github.com/sagemath/sage/blob/develop/src/sage/matrix/matrix_integer_dense.pyx
         self.assertEqual(
-            relations_among([
+            self.ker([
                 Vector([4, 1, 0, 4]),
                 Vector([7, 0, 1, 7]),
                 Vector([9, 5, 0, 6]),
@@ -1366,6 +1401,7 @@ class TestKernels(unittest.TestCase):
             Lattice(6, [[26, -31, 30, -21, -2, 10], [-47, -13, 48, -14, -11, 18]]),
         )
 
+
     def test_relations_among_random(self):
         for values in [
             [-2, -1, 0, 0, 0, 0, 1, 2],
@@ -1374,26 +1410,242 @@ class TestKernels(unittest.TestCase):
             for N in range(5):
                 zero_N = Vector.zero(N)
                 for R in range(5):
-                    for _ in range(10):
+                    for _ in range(100):
                         vecs = [Vector(random.choices(values, k=N)) for _ in range(R)]
                         rank = Lattice(N, vecs, maxrank=R).rank
-                        kernel = relations_among(vecs)
+                        kernel = self.ker(vecs)
                         # Ensure the kernel has the correct rank
                         self.assertEqual(kernel.rank + rank, R)
                         # Ensure the computed kernel vectors are actually relations
                         for row in kernel.tolist():
                             lin_combo = sum((c*vec for (c, vec) in zip(row, vecs)), start=zero_N)
-                            self.assertEqual(lin_combo, zero_N)
+                            self.assertEqual(lin_combo, zero_N, vecs)
                         # Ensure the kernel is saturated
                         self.assertEqual(kernel.invariants(), [1]*kernel.rank + [0] * rank)
 
     def test_relations_among_errors(self):
         with self.assertRaisesRegex(TypeError, "must be a list"):
-            relations_among((1, 2, 3))
+            self.ker((1, 2, 3))
         with self.assertRaisesRegex(TypeError, "must be a list of Vectors"):
-            relations_among([1, 2, 3])
+            self.ker([1, 2, 3])
         with self.assertRaisesRegex(ValueError, "length mismatch"):
-            relations_among([Vector([1,2,3]), Vector([4,5,6,7])])
+            self.ker([Vector([1,2,3]), Vector([4,5,6,7])])
+
+class TestKernelsC(TestKernels, unittest.TestCase):
+    def ker(self, vecs):
+        return relations_among_c(vecs)
+
+class TestKernelsWithDecomposition(TestKernels, unittest.TestCase):
+    def ker(self, vecs):
+        return relations_among_with_decomposition(vecs)
+
+class TestDecomposeRelationsAmong(unittest.TestCase):
+    def test_decompose_relations_among_basic(self):
+        self.assertEqual(decompose_relations_among([]), ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0])]),
+                         ([Vector([1])], [], []))
+        self.assertEqual(decompose_relations_among([Vector([17])]),
+                         ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0, 17, 0])]),
+                         ([], [], []))
+        self.assertEqual(decompose_relations_among([Vector([0, 0, 0])]),
+                         ([Vector([1])], [], []))
+        self.assertEqual(decompose_relations_among([Vector([1,2,3])]),
+                         ([], [], []))
+        # find zero rows
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([]),
+                Vector([]),
+                Vector([]),
+            ]),
+            ([Vector([1,0,0]), Vector([0,1,0]), Vector([0, 0, 1])],
+             [],
+             [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([0,0]),
+                Vector([0,0]),
+                Vector([0,0]),
+            ]),
+            ([Vector([1,0,0]), Vector([0,1,0]), Vector([0, 0, 1])],
+             [],
+             [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,1]),
+                Vector([0,0]),
+                Vector([2,2]),
+            ]),
+            ([Vector([0,1,0])], [Vector([0,2])], [[Vector([1,1]),
+                                                   Vector([2,2])]])
+        )
+        # deduplicate
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([17]),
+                Vector([17]),
+                Vector([17]),
+            ]),
+            ([Vector([1,0,-1]), Vector([0,1,-1])],
+             [],
+             [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([10**k for k in range(100)]),
+                Vector([10**k for k in range(100)]),
+                Vector([10**k for k in range(100)]),
+            ]),
+            ([Vector([1,0,-1]), Vector([0,1,-1])],
+             [],
+             [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,1]),
+                Vector([2,2]),
+                Vector([2,2]),
+                Vector([3,3]),
+                Vector([3,3]),
+                Vector([3,3]),
+            ]),
+            ([Vector([0,1,-1,0,0,0]),Vector([0,0,0,1,0,-1]),Vector([0,0,0,0,1,-1])],
+             [Vector([0, 2, 5])],
+             [[Vector([1,1]), Vector([2,2]), Vector([3,3])]])
+        )
+        # split into smaller problems
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([0, 0, 0]),
+                Vector([0, 5, 0]),
+                Vector([0, 6, 0]),
+                Vector([0, 0, 0]),
+            ]),
+            ([Vector([1,0,0,0]), Vector([0,0,0,1])],
+             [Vector([1, 2])], [[Vector([5]), Vector([6])]])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([0,0,1,1,0,0,0]),
+                Vector([0,0,2,2,0,0,0]),
+                Vector([0,0,0,0,0,3,3]),
+                Vector([0,0,0,0,0,4,4]),
+            ]),
+            ([],
+             [Vector([0, 1]), Vector([2, 3])],
+             [[Vector([1,1]),Vector([2,2])], [Vector([3,3]),Vector([4,4])]])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,0,1,0]),
+                Vector([2,0,2,0]),
+                Vector([0,3,0,3]),
+                Vector([0,4,0,4]),
+            ]),
+            ([],
+             [Vector([0,1]), Vector([2,3])],
+             [[Vector([1,1]),Vector([2,2])], [Vector([3,3]),Vector([4,4])]])
+        )
+        # All together now
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([0,0,0,5,5,5,0]),
+                Vector([0,1,2,0,0,0,0]),
+                Vector([0,2,4,0,0,0,0]),
+                Vector([0,0,0,0,0,0,0]),
+                Vector([0,0,0,0,3,3,0]),
+                Vector([0,0,0,0,1,1,0]),
+                Vector([0,0,0,0,0,0,0]),
+                Vector([0,0,0,5,5,5,0]),
+            ]),
+            ([Vector([0, 0, 0, 1, 0, 0, 0, 0]),
+              Vector([0, 0, 0, 0, 0, 0, 1, 0]),
+              Vector([1, 0, 0, 0, 0, 0, 0, -1])],
+             [Vector([1, 2]), Vector([4, 5])],
+             [[Vector([1,2]),Vector([2,4])], [Vector([3,3]),Vector([1,1])]])
+        )
+        # bigints are okay
+        vecs = [Vector([-36893488147419103234]), Vector([9223372036854775808])]
+        self.assertEqual(
+            decompose_relations_among(vecs),
+            ([], [Vector([0, 1])], [vecs])
+        )
+        # Be sure that crossing out rows/columns can let other rows/columns be
+        # crossed out.
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,2,0,0,0,0]),
+                Vector([0,3,4,0,0,0]),
+                Vector([0,0,5,6,0,0]),
+            ]),
+            ([], [], [])
+        )
+        self.assertEqual(
+            decompose_relations_among([Vector([0]*i + [1]*(100-i)) for i in range(100)]),
+            ([], [], [])
+        )
+        self.assertEqual(
+            decompose_relations_among([
+                Vector([1,2,0,0]),
+                Vector([1,2,0,0]),
+                Vector([3,4,5,6]),
+                Vector([3,4,5,6]),
+            ]),
+            ([Vector([1, -1, 0, 0]), Vector([0, 0, 1, -1])], [], [])
+        )
+
+    def test_decompose_relations_among_random(self):
+        def random_cases():
+            for R in range(5):
+                for N in range(5):
+                    for num_nonzero in range(N*R):
+                        for _ in range(3):
+                            xs = random.choices((-1,0,1,2), k=num_nonzero)
+                            places = random.sample(range(N*R), k=num_nonzero)
+                            data = [Vector.zero(N) for _ in range(R)]
+                            for place, x in zip(places, xs):
+                                i, j = divmod(place, N)
+                                data[i][j] = x
+                            yield R, N, data
+        for R, N, data in random_cases():
+            easy_relations, subproblem_rows, subproblems = decompose_relations_among(data)
+            for rel in easy_relations:
+                nz = list(filter(rel.__getitem__, range(R)))
+                if len(nz) == 1:
+                    [j] = nz
+                    self.assertEqual(rel[j], 1)
+                    self.assertEqual(data[j], Vector.zero(N))
+                else:
+                    [j1, j2] = nz
+                    self.assertEqual([rel[j1], rel[j2]], [1, -1])
+                    self.assertEqual(data[j1], data[j2])
+            total_rank = Lattice(N, data).rank
+            total_nullity = len(easy_relations)
+            for rows, subproblem in zip(subproblem_rows, subproblems, strict=True):
+                for i, v in zip(rows, subproblem):
+                    self.assertEqual(sorted(filter(None, data[i])),
+                                     sorted(filter(None, v)))
+                    self.assertTrue(any(v))
+                for col in zip(*subproblem):
+                    self.assertGreaterEqual(len(list(filter(None, col))), 2)
+                for k in relations_among_c(subproblem).get_basis():
+                    v = Vector.zero(N)
+                    for i, x in zip(rows, k, strict=True):
+                        v += x * data[i]
+                    self.assertEqual(v, Vector.zero(N))
+                    total_nullity += 1
+            self.assertEqual(total_rank + total_nullity, R)
+
+class TestTranspose(unittest.TestCase):
+    def setUp(self):
+        self.VALUES = make_some_values()
+
+    def tearDown(self):
+        self.VALUES.clear()
+        del self.VALUES
 
     def test_transpose(self):
         self.assertEqual(transpose(2, [Vector([1, 2]), Vector([3, 4])]), [Vector([1, 3]), Vector([2, 4])])
