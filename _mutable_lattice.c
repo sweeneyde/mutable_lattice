@@ -4003,11 +4003,11 @@ static PyTypeObject Lattice_Type = {
 };
 
 /*********************************************************************/
-/* relations_among, decompose_relations_among, transpose             */
+/* relations_among_c, decompose_relations_among, transpose             */
 /*********************************************************************/
 
 static PyObject *
-relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
+relations_among_c(PyObject *Py_UNUSED(mod), PyObject *arg)
 {
     if (!PyList_CheckExact(arg)) {
         PyErr_SetString(PyExc_TypeError, "relations_among(vecs) argument must be a list");
@@ -4038,71 +4038,32 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
     // zero rows are at the bottom. To make these zero rows, we had to take
     // Z-linear combination of the input rows. The right portion keeps
     // track of the coefficients needed to do so.
-
-    Py_ssize_t *nonzero_in_column = PyMem_Calloc(N, sizeof(Py_ssize_t));
-    Py_ssize_t *column_order = NULL;
-    Py_ssize_t *index_of_first_nonzero = PyMem_Malloc(R * sizeof(Py_ssize_t));
-    Py_ssize_t *rows_by_index_of_first_nonzero = NULL;
     TagInt *scratch = PyMem_Malloc((N + R) * sizeof(TagInt *));
-    Lattice *L = NULL;
-    Lattice *relations = NULL;
     PyObject *result = NULL;
-    if (nonzero_in_column == NULL  || index_of_first_nonzero == NULL || scratch == NULL) {
+    Lattice *relations = NULL;
+    if (scratch == NULL) {
         PyErr_NoMemory();
-        goto error;
+        return NULL;
     }
-
-    // A first tweak:
-    // Earlier columns influence what row operations happen on what that follows them,
-    // so we reshuffle the columns so that less populated columns come first.
-    for (Py_ssize_t i = 0; i < R; i++) {
-        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        for (Py_ssize_t j = 0; j < N; j++) {
-            if (!TagInt_is_zero(vec[j])) {
-                nonzero_in_column[j]++;
-            }
-        }
-    }
-    column_order = counting_sort_order(nonzero_in_column, N);
-    if (column_order == NULL) {
-        goto error;
-    }
-    Py_ssize_t k0 = 0; // the first nonzero column
-    while (k0 < N && nonzero_in_column[column_order[k0]] == 0) {
-        k0++;
-    }
-
-    // A second tweak:
-    // Sort rows by decreasing index of first nonzero entry. This allows
-    // the bottom right corner to stay HNF while new rows are added above it.
-    for (Py_ssize_t i = 0; i < R; i++) {
-        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        Py_ssize_t k = k0;
-        while (k < N && TagInt_is_zero(vec[column_order[k]])) {
-            k++;
-        }
-        index_of_first_nonzero[i] = k;
-    }
-    rows_by_index_of_first_nonzero = counting_sort_order(index_of_first_nonzero, R);
-    if (rows_by_index_of_first_nonzero == NULL) {
-        goto error;
-    }
-
     // Now add everything in in an appropriate order
-    L = (Lattice *)Lattice_new_impl(&Lattice_Type, N - k0 + R, 1, R);
+    Lattice *L = (Lattice *)Lattice_new_impl(&Lattice_Type, N + R, 1, R);
     if (L == NULL) {
-        goto error;
+        PyMem_Free(scratch);
+        return NULL;
     }
-    for (Py_ssize_t ii = R-1; ii >= 0; ii--) {
-        Py_ssize_t i = rows_by_index_of_first_nonzero[ii];
+    for (Py_ssize_t i = R-1; i >= 0; i--) {
         TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-        for (Py_ssize_t k = k0; k < N; k++) {
-            scratch[k - k0] = vec[column_order[k]];
-        }
-        memset(scratch + N - k0, 0, R*sizeof(TagInt *));
-        scratch[N - k0 + i] = TagInt_ONE;
+        memcpy(scratch, vec, N*sizeof(TagInt));
+        memset(scratch + N, 0, R*sizeof(TagInt *));
+        scratch[N + i] = TagInt_ONE;
         if (Lattice_add_vector_impl(L, scratch)) {
             goto error;
+        }
+        if (R > 1000 && L->rank % 16 == 0 && PyErr_CheckSignals() < 0) {
+            goto error;
+        }
+        if (R > 1000 && L->rank % 100 == 0) {
+            printf("relations_among_c: %ld/%ld vectors added\n", (long)L->rank, (long)R);
         }
     }
     relations = (Lattice *)Lattice_new_impl(&Lattice_Type, R, 1, R);
@@ -4110,19 +4071,13 @@ relations_among(PyObject *Py_UNUSED(mod), PyObject *arg)
         goto error;
     }
     assert(L->rank == R);
-    for (Py_ssize_t i = R - 1; i >= 0; i--) {
-        if (L->row_to_pivot[i] >= N - k0) {
-            if (Lattice_add_vector_impl(relations, L->basis[i] + N - k0)) {
-                goto error;
-            }
+    for (Py_ssize_t i = R - 1; i >= 0 && L->row_to_pivot[i] >= N; i--) {
+        if (Lattice_add_vector_impl(relations, L->basis[i] + N)) {
+            goto error;
         }
     }
     result = Py_NewRef((PyObject *)relations);
 error:
-    PyMem_Free(nonzero_in_column);
-    PyMem_Free(column_order);
-    PyMem_Free(index_of_first_nonzero);
-    PyMem_Free(rows_by_index_of_first_nonzero);
     PyMem_Free(scratch);
     Py_XDECREF(L);
     Py_XDECREF(relations);
@@ -4493,43 +4448,92 @@ append_subproblem(
     PyObject *subproblems_list
 )
 {
+    // shuffle the columns to put the most-used columns first
+    Py_ssize_t *col_to_count = PyMem_Calloc(num_cols, sizeof(Py_ssize_t));
+    Py_ssize_t *row_to_index = PyMem_Malloc(num_rows * sizeof(Py_ssize_t));
+    if (col_to_count == NULL || row_to_index == NULL) {
+        PyErr_NoMemory();
+        return true;
+    }
+    for (Py_ssize_t ii = 0; ii < num_rows; ii++) {
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, rows[ii]));
+        for (Py_ssize_t jj = 0; jj < num_cols; jj++) {
+            if (!TagInt_is_zero(vec[cols[jj]])) {
+                col_to_count[jj]++;
+            }
+        }
+    }
+    Py_ssize_t *col_order = counting_sort_order(col_to_count, num_cols);
+    PyMem_Free(col_to_count);
+    if (col_order == NULL) {
+        PyMem_Free(row_to_index);
+        return true;
+    }
+    // sort the rows by increasing index of first nonzero entry
+    for (Py_ssize_t ii = 0; ii < num_rows; ii++) {
+        TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, rows[ii]));
+        Py_ssize_t jjj = 0;
+        while (TagInt_is_zero(vec[cols[col_order[jjj]]])) {
+            jjj++;
+        }
+        assert(jjj < num_cols);
+        row_to_index[ii] = jjj;
+    }
+    Py_ssize_t *row_order = counting_sort_order(row_to_index, num_rows);
+    PyMem_Free(row_to_index);
+    if (row_order == NULL) {
+        PyMem_Free(col_order);
+        return true;
+    }
     PyObject *subproblem_rows = Vector_zero_impl(num_rows);
     if (subproblem_rows == NULL) {
+        PyMem_Free(row_order);
+        PyMem_Free(col_order);
         return true;
     }
     TagInt *rows_vec = Vector_get_vec(subproblem_rows);
-    for (Py_ssize_t ii = 0; ii < num_rows; ii++) {
+    for (Py_ssize_t iii = 0; iii < num_rows; iii++) {
         static_assert(sizeof(intptr_t) == sizeof(Py_ssize_t));
-        rows_vec[ii] = pack_integer((intptr_t)rows[ii]);
+        rows_vec[iii] = pack_integer((intptr_t)rows[row_order[iii]]);
     }
     if (PyList_Append(subproblem_rows_list, subproblem_rows) < 0) {
         Py_DECREF(subproblem_rows);
+        PyMem_Free(row_order);
+        PyMem_Free(col_order);
         return true;
     }
     Py_DECREF(subproblem_rows);
 
     PyObject *subproblem = PyList_New(num_rows);
     if (subproblem == NULL) {
+        PyMem_Free(row_order);
+        PyMem_Free(col_order);
         return true;
     }
-    for (Py_ssize_t ii = 0; ii < num_rows; ii++) {
+    for (Py_ssize_t iii = 0; iii < num_rows; iii++) {
         PyObject *v = Vector_zero_impl(num_cols);
         if (v == NULL) {
             Py_DECREF(subproblem);
+            PyMem_Free(row_order);
+            PyMem_Free(col_order);
             return true;
         }
         TagInt *dest = Vector_get_vec(v);
-        TagInt *source = Vector_get_vec(PyList_GET_ITEM(arg, rows[ii]));
-        for (Py_ssize_t jj = 0; jj < num_cols; jj++) {
-            dest[jj] = TagInt_copy(source[cols[jj]]);
+        TagInt *source = Vector_get_vec(PyList_GET_ITEM(arg, rows[row_order[iii]]));
+        for (Py_ssize_t jjj = 0; jjj < num_cols; jjj++) {
+            dest[jjj] = TagInt_copy(source[cols[col_order[jjj]]]);
         }
-        PyList_SET_ITEM(subproblem, ii, v);
+        PyList_SET_ITEM(subproblem, iii, v);
     }
     if (PyList_Append(subproblems_list, subproblem) < 0) {
         Py_DECREF(subproblem);
+        PyMem_Free(row_order);
+        PyMem_Free(col_order);
         return true;
     }
     Py_DECREF(subproblem);
+    PyMem_Free(row_order);
+    PyMem_Free(col_order);
     return false;
 }
 
@@ -4736,7 +4740,7 @@ static PyMethodDef mutable_lattice_methods[] = {
      "generalized_row_op(v, w, a, b, c, d) does (v, w) = (a*v+b*w, c*v+d*w) when v and w are Vectors"},
     {"xgcd", (PyCFunction)(void(*)(void))xgcd, METH_FASTCALL,
      "xgcd(a, b) returns a triple (x, y, g) of integers with x*a + y*b == g == gcd(a, b)"},
-    {"relations_among_c", relations_among, METH_O,
+    {"relations_among_c", relations_among_c, METH_O,
      "relations_among_c([v0, ..., vk]) returns the Lattice of coefficient vectors for linear dependencies among the given Vectors"},
     {"decompose_relations_among", decompose_relations_among, METH_O,
      "decompose_relations_among([v0, ..., vk]) reduces a relations_among calculation to sub-problems. "
