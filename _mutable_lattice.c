@@ -4394,17 +4394,17 @@ partition_active_columns(
         assert(rowstacktop < num_active_rows);
         rowstack[rowstacktop++] = i0;
         row_to_component[i0] = k;
-        assert(rowstacktop < num_active_rows);
         rows_by_component[num_rows_done++] = i0;
         component_to_num_rows[k]++;
         while (rowstacktop || colstacktop) {
             while (rowstacktop) {
                 Py_ssize_t i = rowstack[--rowstacktop];
                 TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-                for (Py_ssize_t j = 0; j < N; j++) {
+                for (Py_ssize_t j = N-1; j >= 0; j--) {
                     if (col_active[j] && col_to_component[j] < 0
                         && !TagInt_is_zero(vec[j]))
                     {
+                        assert(colstacktop < num_active_cols);
                         colstack[colstacktop++] = j;
                         col_to_component[j] = k;
                         cols_by_component[num_cols_done++] = j;
@@ -4414,10 +4414,11 @@ partition_active_columns(
             }
             while (colstacktop) {
                 Py_ssize_t j = colstack[--colstacktop];
-                for (Py_ssize_t i = 0; i < R; i++) {
+                for (Py_ssize_t i = R-1; i >= 0; i--) {
                     if (row_active[i] && row_to_component[i] < 0
                         && !TagInt_is_zero(Vector_get_vec(PyList_GET_ITEM(arg, i))[j]))
                     {
+                        assert(rowstacktop < num_active_rows);
                         rowstack[rowstacktop++] = i;
                         row_to_component[i] = k;
                         rows_by_component[num_rows_done++] = i;
@@ -4429,6 +4430,7 @@ partition_active_columns(
     }
     assert(num_rows_done == num_active_rows);
     assert(num_cols_done == num_active_cols);
+    assert(num_components <= max_num_components);
     PyMem_Free(rowstack); PyMem_Free(colstack);
     PyMem_Free(row_to_component); PyMem_Free(col_to_component);
     *p_num_components = num_components;
