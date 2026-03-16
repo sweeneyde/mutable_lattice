@@ -4487,11 +4487,10 @@ append_subproblem(
         PyMem_Free(col_order);
         return true;
     }
+    // Here we begin using "goto error"
     PyObject *subproblem_rows = Vector_zero_impl(num_rows);
     if (subproblem_rows == NULL) {
-        PyMem_Free(row_order);
-        PyMem_Free(col_order);
-        return true;
+        goto error;
     }
     TagInt *rows_vec = Vector_get_vec(subproblem_rows);
     for (Py_ssize_t iii = 0; iii < num_rows; iii++) {
@@ -4500,25 +4499,19 @@ append_subproblem(
     }
     if (PyList_Append(subproblem_rows_list, subproblem_rows) < 0) {
         Py_DECREF(subproblem_rows);
-        PyMem_Free(row_order);
-        PyMem_Free(col_order);
-        return true;
+        goto error;
     }
     Py_DECREF(subproblem_rows);
 
     PyObject *subproblem = PyList_New(num_rows);
     if (subproblem == NULL) {
-        PyMem_Free(row_order);
-        PyMem_Free(col_order);
-        return true;
+        goto error;
     }
     for (Py_ssize_t iii = 0; iii < num_rows; iii++) {
         PyObject *v = Vector_zero_impl(num_cols);
         if (v == NULL) {
             Py_DECREF(subproblem);
-            PyMem_Free(row_order);
-            PyMem_Free(col_order);
-            return true;
+            goto error;
         }
         TagInt *dest = Vector_get_vec(v);
         TagInt *source = Vector_get_vec(PyList_GET_ITEM(arg, rows[row_order[iii]]));
@@ -4529,14 +4522,16 @@ append_subproblem(
     }
     if (PyList_Append(subproblems_list, subproblem) < 0) {
         Py_DECREF(subproblem);
-        PyMem_Free(row_order);
-        PyMem_Free(col_order);
-        return true;
+        goto error;
     }
     Py_DECREF(subproblem);
     PyMem_Free(row_order);
     PyMem_Free(col_order);
     return false;
+error:
+    PyMem_Free(row_order);
+    PyMem_Free(col_order);
+    return true;
 }
 
 static PyObject *
