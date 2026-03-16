@@ -4355,8 +4355,8 @@ partition_active_columns(
         }
     }
     Py_ssize_t max_num_components = Py_MIN(num_active_rows, num_active_cols);
-    Py_ssize_t *rowstack = PyMem_Malloc(num_active_rows * sizeof(Py_ssize_t));
-    Py_ssize_t *colstack = PyMem_Malloc(num_active_cols * sizeof(Py_ssize_t));
+    Py_ssize_t *row_queue = PyMem_Malloc(num_active_rows * sizeof(Py_ssize_t));
+    Py_ssize_t *col_queue = PyMem_Malloc(num_active_cols * sizeof(Py_ssize_t));
     Py_ssize_t *row_to_component = PyMem_Malloc(R * sizeof(Py_ssize_t));
     Py_ssize_t *col_to_component = PyMem_Malloc(N * sizeof(Py_ssize_t));
     Py_ssize_t *component_to_num_rows = PyMem_Calloc(max_num_components, sizeof(Py_ssize_t));
@@ -4364,15 +4364,14 @@ partition_active_columns(
     Py_ssize_t *rows_by_component = PyMem_Malloc(num_active_rows * sizeof(Py_ssize_t));
     Py_ssize_t *cols_by_component = PyMem_Malloc(num_active_cols * sizeof(Py_ssize_t));
     Py_ssize_t num_components = 0;
-    Py_ssize_t rowstacktop = 0, colstacktop = 0;
     Py_ssize_t num_rows_done = 0, num_cols_done = 0;
-    if (!(rowstack && colstack &&
+    if (!(row_queue && col_queue &&
           row_to_component && col_to_component &&
           component_to_num_rows && component_to_num_cols &&
           rows_by_component && cols_by_component
     )) {
         PyErr_NoMemory();
-        PyMem_Free(rowstack); PyMem_Free(colstack);
+        PyMem_Free(row_queue); PyMem_Free(col_queue);
         PyMem_Free(row_to_component); PyMem_Free(col_to_component);
         PyMem_Free(component_to_num_rows); PyMem_Free(component_to_num_cols);
         PyMem_Free(rows_by_component); PyMem_Free(cols_by_component);
@@ -4384,54 +4383,56 @@ partition_active_columns(
     for (Py_ssize_t j = 0; j < N; j++) {
         col_to_component[j] = -1;
     }
-    // Explore the bipartite graph of rows and columns
+    // BFS the bipartite graph of rows and columns
     // connected whenever they intersect at a nonzero entry.
     for (Py_ssize_t i0 = 0; i0 < R; i0++) {
         if (!row_active[i0] || row_to_component[i0] >= 0) {
             continue;
         }
+        Py_ssize_t row_queue_length = 1, col_queue_length = 0;
         Py_ssize_t k = num_components++;
-        assert(rowstacktop < num_active_rows);
-        rowstack[rowstacktop++] = i0;
+        row_queue[0] = i0;
         row_to_component[i0] = k;
         rows_by_component[num_rows_done++] = i0;
         component_to_num_rows[k]++;
-        while (rowstacktop || colstacktop) {
-            while (rowstacktop) {
-                Py_ssize_t i = rowstack[--rowstacktop];
+        do {
+            assert(row_queue_length <= num_active_rows);
+            for (Py_ssize_t ii = 0; ii < row_queue_length; ii++) {
+                Py_ssize_t i = row_queue[ii];
                 TagInt *vec = Vector_get_vec(PyList_GET_ITEM(arg, i));
-                for (Py_ssize_t j = N-1; j >= 0; j--) {
+                for (Py_ssize_t j = 0; j < N; j++) {
                     if (col_active[j] && col_to_component[j] < 0
                         && !TagInt_is_zero(vec[j]))
                     {
-                        assert(colstacktop < num_active_cols);
-                        colstack[colstacktop++] = j;
+                        col_queue[col_queue_length++] = j;
                         col_to_component[j] = k;
                         cols_by_component[num_cols_done++] = j;
                         component_to_num_cols[k]++;
                     }
                 }
             }
-            while (colstacktop) {
-                Py_ssize_t j = colstack[--colstacktop];
-                for (Py_ssize_t i = R-1; i >= 0; i--) {
+            row_queue_length = 0;
+            assert(col_queue_length <= num_active_cols);
+            for (Py_ssize_t jj = 0; jj < col_queue_length; jj++) {
+                Py_ssize_t j = col_queue[jj];
+                for (Py_ssize_t i = 0; i < R; i++) {
                     if (row_active[i] && row_to_component[i] < 0
                         && !TagInt_is_zero(Vector_get_vec(PyList_GET_ITEM(arg, i))[j]))
                     {
-                        assert(rowstacktop < num_active_rows);
-                        rowstack[rowstacktop++] = i;
+                        row_queue[row_queue_length++] = i;
                         row_to_component[i] = k;
                         rows_by_component[num_rows_done++] = i;
                         component_to_num_rows[k]++;
                     }
                 }
             }
-        }
+            col_queue_length = 0;
+        } while (row_queue_length);
     }
     assert(num_rows_done == num_active_rows);
     assert(num_cols_done == num_active_cols);
     assert(num_components <= max_num_components);
-    PyMem_Free(rowstack); PyMem_Free(colstack);
+    PyMem_Free(row_queue); PyMem_Free(col_queue);
     PyMem_Free(row_to_component); PyMem_Free(col_to_component);
     *p_num_components = num_components;
     *p_component_to_num_rows = component_to_num_rows;
