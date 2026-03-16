@@ -1629,8 +1629,13 @@ class TestDecomposeRelationsAmong(unittest.TestCase):
                     self.assertEqual(sorted(filter(None, data[i])),
                                      sorted(filter(None, v)))
                     self.assertTrue(any(v))
-                for col in zip(*subproblem):
-                    self.assertGreaterEqual(len(list(filter(None, col))), 2)
+                rn = range(len(subproblem[0]))
+                indexes = [next(filter(v.__getitem__, rn)) for v in subproblem]
+                self.assertEqual(indexes, sorted(indexes))
+                cols = transpose(len(subproblem[0]), subproblem)
+                nonzeros_in_cols = [len(list(filter(None, col))) for col in cols]
+                self.assertGreaterEqual(min(nonzeros_in_cols), 2)
+                self.assertEqual(nonzeros_in_cols, sorted(nonzeros_in_cols))
                 for k in relations_among_c(subproblem).get_basis():
                     v = Vector.zero(N)
                     for i, x in zip(rows, k, strict=True):
