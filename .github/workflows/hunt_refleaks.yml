@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Check for refleaks
     steps:
-      - uses: actions/checkout@v2
-      - uses: deadsnakes/action@v3.2.0
+      - uses: actions/checkout@v6
+      - uses: deadsnakes/action@v3
         with:
           python-version: 3.11-dev
           debug: true
